@@ -582,9 +582,12 @@ func parseSequenceOf(bytes []byte, sliceType reflect.Type, elemType reflect.Type
 			t.tag = TagUTCTime
 		}
 
-		if t.class != ClassUniversal || t.isCompound != compoundType || t.tag != expectedTag {
-			err = StructuralError{fmt.Sprintf("sequence tag mismatch (got:%+v, want:0/%d/%t)", t, expectedTag, compoundType), fieldName}
-			return
+		// Don't check the element type if this is []asn1.RawValue, to allow for SET OF ANY / SEQUENCE OF ANY.
+		if elemType != rawValueType {
+			if t.class != ClassUniversal || t.isCompound != compoundType || t.tag != expectedTag {
+				err = StructuralError{fmt.Sprintf("sequence tag mismatch (got:%+v, want:0/%d/%t)", t, expectedTag, compoundType), fieldName}
+				return
+			}
 		}
 		if invalidLength(offset, t.length, len(bytes)) {
 			err = SyntaxError{"truncated sequence", fieldName}
