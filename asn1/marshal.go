@@ -413,8 +413,8 @@ func appendTimeCommon(dst []byte, t time.Time) []byte {
 	return dst
 }
 
-func stripTagAndLength(in []byte) []byte {
-	_, offset, err := parseTagAndLength(in, 0, "")
+func stripTagAndLength(in []byte, fieldName string) []byte {
+	_, offset, err := parseTagAndLength(in, 0, fieldName)
 	if err != nil {
 		return in
 	}
@@ -473,7 +473,7 @@ func makeBody(value reflect.Value, params fieldParameters) (e encoder, err error
 				 * length fields but we'll also be writing
 				 * those ourselves, so we strip them out of
 				 * bytes */
-				return bytesEncoder(stripTagAndLength(bytes)), nil
+				return bytesEncoder(stripTagAndLength(bytes, params.name)), nil
 			}
 
 			startingField = 1
@@ -483,11 +483,15 @@ func makeBody(value reflect.Value, params fieldParameters) (e encoder, err error
 		case 0:
 			return bytesEncoder(nil), nil
 		case 1:
-			return makeField(v.Field(startingField), parseFieldParameters(t.Field(startingField).Tag.Get("asn1")))
+			innerParams := parseFieldParameters(t.Field(startingField).Tag.Get("asn1"))
+			innerParams.name = t.Field(startingField).Name
+			return makeField(v.Field(startingField), innerParams)
 		default:
 			m := make([]encoder, n1)
 			for i := 0; i < n1; i++ {
-				m[i], err = makeField(v.Field(i+startingField), parseFieldParameters(t.Field(i+startingField).Tag.Get("asn1")))
+				innerParams := parseFieldParameters(t.Field(i + startingField).Tag.Get("asn1"))
+				innerParams.name = t.Field(i + startingField).Name
+				m[i], err = makeField(v.Field(i+startingField), innerParams)
 				if err != nil {
 					return nil, err
 				}
@@ -502,6 +506,7 @@ func makeBody(value reflect.Value, params fieldParameters) (e encoder, err error
 		}
 
 		var fp fieldParameters
+		fp.name = params.name
 
 		switch l := v.Len(); l {
 		case 0:
