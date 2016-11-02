@@ -551,6 +551,11 @@ type TestSetOfAny struct {
 }
 type anySET []RawValue
 
+type TestImplicitBitString struct {
+	S  string
+	ID BitString `asn1:"optional,tag:1"`
+}
+
 var unmarshalTestData = []struct {
 	in     []byte
 	params string
@@ -589,6 +594,9 @@ var unmarshalTestData = []struct {
 	{[]byte{0x13, 0x04, 'c', 'a', 'f', 0xE9}, "lax", newString("café")},
 	// 0xFB is û in ISO8859-1, ß in T.61, taken to be the former.
 	{[]byte{0x13, 0x04, 'a', 'b', 'c', 0xFB}, "lax", newString("abcû")},
+	{[]byte{0x30, 0x05, 0x13, 0x03, 0x66, 0x6f, 0x6f}, "", &TestImplicitBitString{S: "foo"}},
+	{[]byte{0x30, 0x0a, 0x13, 0x03, 0x66, 0x6f, 0x6f, 0x81, 0x03, 0x01, 0x03, 0x04}, "",
+		&TestImplicitBitString{S: "foo", ID: BitString{[]byte{3, 4}, 15}}},
 }
 
 func TestUnmarshal(t *testing.T) {
@@ -601,6 +609,38 @@ func TestUnmarshal(t *testing.T) {
 		}
 		if !reflect.DeepEqual(val, test.out) {
 			t.Errorf("#%d:\nhave %#v\nwant %#v", i, val, test.out)
+		}
+	}
+}
+
+var unmarshalInvalidTestData = []struct {
+	in          []byte
+	params      string
+	out         interface{} // just to give receiving type
+	expectedErr string
+}{
+	{[]byte{0x13, 0x04, 'c', 'a', 'f', 0xE9}, "", newString(""), "invalid character"},
+	{[]byte{0x13, 0x04, 'a', 'b', 'c', 0xFB}, "", newString(""), "invalid character"},
+	{[]byte{0x13, 0x04, 'a', 'b', 'c', '@'}, "", newString(""), "invalid character"},
+	{[]byte{0x13, 0x04, 'a', 'b', 'c', '!'}, "", newString(""), "invalid character"},
+	{[]byte{0x13, 0x04, 'a', 'b', 'c', 0x81}, "", newString(""), "invalid character"},
+	// optional [1] BIT STRING with pad bits non-zero
+	{[]byte{0x30, 0x0a, 0x13, 0x03, 0x66, 0x6f, 0x6f, 0x81, 0x03, 0x01, 0x03, 0x05}, "", &TestImplicitBitString{}, "invalid padding bits"},
+	// optional [1] BIT STRING with invalid count of pad bits
+	{[]byte{0x30, 0x0a, 0x13, 0x03, 0x66, 0x6f, 0x6f, 0x81, 0x03, 0x09, 0x03, 0x04}, "", &TestImplicitBitString{}, "invalid padding bits"},
+	// optional [1] BIT STRING is constructed
+	{[]byte{0x30, 0x0a, 0x13, 0x03, 0x66, 0x6f, 0x6f, 0xa1, 0x03, 0x01, 0x03, 0x04}, "", &TestImplicitBitString{}, "structure error"},
+}
+
+func TestUnmarshalInvalidData(t *testing.T) {
+	for i, test := range unmarshalInvalidTestData {
+		pv := reflect.New(reflect.TypeOf(test.out).Elem())
+		val := pv.Interface()
+		_, err := UnmarshalWithParams(test.in, val, test.params)
+		if err == nil {
+			t.Errorf("Unmarshal succeeded at index %d", i)
+		} else if !strings.Contains(err.Error(), test.expectedErr) {
+			t.Fatalf("Expected error to mention %q but error was %q", test.expectedErr, err.Error())
 		}
 	}
 }

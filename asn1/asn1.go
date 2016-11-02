@@ -873,8 +873,14 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 
 	// We have unwrapped any explicit tagging at this point.
 	if t.class != expectedClass || t.tag != expectedTag || t.isCompound != compoundType {
-		// Tags don't match. Again, it could be an optional element.
-		ok := setDefaultValue(v, params)
+		var ok bool
+		if t.class == expectedClass && t.tag == expectedTag {
+			// Tags match, constructed bit doesn't.
+			ok = false
+		} else {
+			// Tags don't match. Again, it could be an optional element.
+			ok = setDefaultValue(v, params)
+		}
 		if ok {
 			offset = initOffset
 		} else {
