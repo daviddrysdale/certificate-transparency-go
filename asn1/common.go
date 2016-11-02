@@ -81,6 +81,7 @@ type fieldParameters struct {
 	set          bool   // true iff this should be encoded as a SET
 	omitEmpty    bool   // true iff this should be omitted if empty when marshaling.
 	bitset       bool   // true iff this BIT STRING should skip trailing zero bits
+	lax          bool   // true iff unmarshalling should skip some steps
 	name         string // name of field for better diagnostics
 
 	// Invariants:
@@ -133,6 +134,8 @@ func parseFieldParameters(str string) (ret fieldParameters) {
 			ret.omitEmpty = true
 		case part == "bitset":
 			ret.bitset = true
+		case part == "lax":
+			ret.lax = true
 		}
 	}
 	return

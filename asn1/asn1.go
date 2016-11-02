@@ -9,9 +9,11 @@
 // http://luca.ntop.org/Teaching/Appunti/asn1.html.
 //
 // This is a fork of the Go standard library ASN.1 implementation
-// (encoding/asn1).  The main difference is that this version tries to correct
-// for errors (e.g. use of tagPrintableString when the string data is really
-// ISO8859-1 - a common error present in many x509 certificates in the wild.)
+// (encoding/asn1).  The main difference is that this version adds an extra
+// "lax" tag; this tag applies recursively and relaxes checks for invalid
+// PrintableString contents, because e.g. use of tagPrintableString when the
+// string data is really ISO8859-1 is a common error present in many x509
+// certificates in the wild.
 package asn1
 
 // ASN.1 is a syntax for specifying abstract objects and BER, DER, PER, XER etc
@@ -31,7 +33,6 @@ import (
 	"math/big"
 	"reflect"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -94,11 +95,14 @@ func parseBool(bytes []byte, fieldName string) (ret bool, err error) {
 
 // checkInteger returns nil if the given bytes are a valid DER-encoded
 // INTEGER and an error otherwise.
-func checkInteger(bytes []byte, fieldName string) error {
+func checkInteger(bytes []byte, lax bool, fieldName string) error {
 	if len(bytes) == 0 {
 		return StructuralError{"empty integer", fieldName}
 	}
 	if len(bytes) == 1 {
+		return nil
+	}
+	if lax {
 		return nil
 	}
 	if (bytes[0] == 0 && bytes[1]&0x80 == 0) || (bytes[0] == 0xff && bytes[1]&0x80 == 0x80) {
@@ -109,8 +113,8 @@ func checkInteger(bytes []byte, fieldName string) error {
 
 // parseInt64 treats the given bytes as a big-endian, signed integer and
 // returns the result.
-func parseInt64(bytes []byte, fieldName string) (ret int64, err error) {
-	err = checkInteger(bytes, fieldName)
+func parseInt64(bytes []byte, lax bool, fieldName string) (ret int64, err error) {
+	err = checkInteger(bytes, lax, fieldName)
 	if err != nil {
 		return
 	}
@@ -132,11 +136,11 @@ func parseInt64(bytes []byte, fieldName string) (ret int64, err error) {
 
 // parseInt treats the given bytes as a big-endian, signed integer and returns
 // the result.
-func parseInt32(bytes []byte, fieldName string) (int32, error) {
-	if err := checkInteger(bytes, fieldName); err != nil {
+func parseInt32(bytes []byte, lax bool, fieldName string) (int32, error) {
+	if err := checkInteger(bytes, lax, fieldName); err != nil {
 		return 0, err
 	}
-	ret64, err := parseInt64(bytes, fieldName)
+	ret64, err := parseInt64(bytes, lax, fieldName)
 	if err != nil {
 		return 0, err
 	}
@@ -150,8 +154,8 @@ var bigOne = big.NewInt(1)
 
 // parseBigInt treats the given bytes as a big-endian, signed integer and returns
 // the result.
-func parseBigInt(bytes []byte, fieldName string) (*big.Int, error) {
-	if err := checkInteger(bytes, fieldName); err != nil {
+func parseBigInt(bytes []byte, lax bool, fieldName string) (*big.Int, error) {
+	if err := checkInteger(bytes, lax, fieldName); err != nil {
 		return nil, err
 	}
 	ret := new(big.Int)
@@ -404,10 +408,25 @@ func parseGeneralizedTime(bytes []byte) (ret time.Time, err error) {
 
 // parsePrintableString parses a ASN.1 PrintableString from the given byte
 // array and returns it.
-func parsePrintableString(bytes []byte, fieldName string) (ret string, err error) {
+func parsePrintableString(bytes []byte, lax bool, fieldName string) (ret string, err error) {
 	for _, b := range bytes {
 		if !isPrintable(b) {
-			err = SyntaxError{"PrintableString contains invalid character", fieldName}
+			if !lax {
+				err = SyntaxError{"PrintableString contains invalid character", fieldName}
+			} else {
+				// Might be an ISO8859-1 string stuffed in, check if it
+				// would be valid and assume that's what's happened if so,
+				// otherwise try T.61, failing that give up and just assign
+				// the bytes
+				switch {
+				case couldBeISO8859_1(bytes):
+					ret, err = iso8859_1ToUTF8(bytes), nil
+				case couldBeT61(bytes):
+					ret, err = parseT61String(bytes)
+				default:
+					err = SyntaxError{"PrintableString contains invalid character, couldn't determine correct String type", fieldName}
+				}
+			}
 			return
 		}
 	}
@@ -563,7 +582,7 @@ func parseTagAndLength(bytes []byte, initOffset int, fieldName string) (ret tagA
 // parseSequenceOf is used for SEQUENCE OF and SET OF values. It tries to parse
 // a number of ASN.1 values from the given byte slice and returns them as a
 // slice of Go values of the given type.
-func parseSequenceOf(bytes []byte, sliceType reflect.Type, elemType reflect.Type, fieldName string) (ret reflect.Value, err error) {
+func parseSequenceOf(bytes []byte, sliceType reflect.Type, elemType reflect.Type, lax bool, fieldName string) (ret reflect.Value, err error) {
 	expectedTag, compoundType, ok := getUniversalType(elemType)
 	if !ok {
 		err = StructuralError{"unknown Go type for slice", fieldName}
@@ -605,7 +624,7 @@ func parseSequenceOf(bytes []byte, sliceType reflect.Type, elemType reflect.Type
 		numElements++
 	}
 	ret = reflect.MakeSlice(sliceType, numElements, numElements)
-	params := fieldParameters{}
+	params := fieldParameters{lax: lax}
 	offset := 0
 	for i := 0; i < numElements; i++ {
 		offset, err = parseField(ret.Index(i), bytes, offset, params)
@@ -743,22 +762,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 			innerBytes := bytes[offset : offset+t.length]
 			switch t.tag {
 			case TagPrintableString:
-				result, err = parsePrintableString(innerBytes, params.name)
-				if err != nil && strings.Contains(err.Error(), "PrintableString contains invalid character") {
-					// Probably an ISO8859-1 string stuffed in, check if it
-					// would be valid and assume that's what's happened if so,
-					// otherwise try T.61, failing that give up and just assign
-					// the bytes
-					switch {
-					case couldBeISO8859_1(innerBytes):
-						result, err = iso8859_1ToUTF8(innerBytes), nil
-					case couldBeT61(innerBytes):
-						result, err = parseT61String(innerBytes)
-					default:
-						result = nil
-						err = errors.New("PrintableString contains invalid character, but couldn't determine correct String type.")
-					}
-				}
+				result, err = parsePrintableString(innerBytes, params.lax, params.name)
 			case TagIA5String:
 				result, err = parseIA5String(innerBytes, params.name)
 			case TagT61String:
@@ -766,7 +770,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 			case TagUTF8String:
 				result, err = parseUTF8String(innerBytes)
 			case TagInteger:
-				result, err = parseInt64(innerBytes, params.name)
+				result, err = parseInt64(innerBytes, params.lax, params.name)
 			case TagBitString:
 				result, err = parseBitString(innerBytes, false, params.name)
 			case TagOID:
@@ -916,7 +920,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 		err = err1
 		return
 	case enumeratedType:
-		parsedInt, err1 := parseInt32(innerBytes, params.name)
+		parsedInt, err1 := parseInt32(innerBytes, params.lax, params.name)
 		if err1 == nil {
 			v.SetInt(int64(parsedInt))
 		}
@@ -926,7 +930,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 		v.SetBool(true)
 		return
 	case bigIntType:
-		parsedInt, err1 := parseBigInt(innerBytes, params.name)
+		parsedInt, err1 := parseBigInt(innerBytes, params.lax, params.name)
 		if err1 == nil {
 			v.Set(reflect.ValueOf(parsedInt))
 		}
@@ -943,13 +947,13 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 		return
 	case reflect.Int, reflect.Int32, reflect.Int64:
 		if val.Type().Size() == 4 {
-			parsedInt, err1 := parseInt32(innerBytes, params.name)
+			parsedInt, err1 := parseInt32(innerBytes, params.lax, params.name)
 			if err1 == nil {
 				val.SetInt(int64(parsedInt))
 			}
 			err = err1
 		} else {
-			parsedInt, err1 := parseInt64(innerBytes, params.name)
+			parsedInt, err1 := parseInt64(innerBytes, params.lax, params.name)
 			if err1 == nil {
 				val.SetInt(parsedInt)
 			}
@@ -981,6 +985,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 			}
 			innerParams := parseFieldParameters(field.Tag.Get("asn1"))
 			innerParams.name = field.Name
+			innerParams.lax = params.lax
 			innerOffset, err = parseField(val.Field(i), innerBytes, innerOffset, innerParams)
 			if err != nil {
 				return
@@ -997,7 +1002,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 			reflect.Copy(val, reflect.ValueOf(innerBytes))
 			return
 		}
-		newSlice, err1 := parseSequenceOf(innerBytes, sliceType, sliceType.Elem(), params.name)
+		newSlice, err1 := parseSequenceOf(innerBytes, sliceType, sliceType.Elem(), params.lax, params.name)
 		if err1 == nil {
 			val.Set(newSlice)
 		}
@@ -1007,7 +1012,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 		var v string
 		switch universalTag {
 		case TagPrintableString:
-			v, err = parsePrintableString(innerBytes, params.name)
+			v, err = parsePrintableString(innerBytes, params.lax, params.name)
 		case TagIA5String:
 			v, err = parseIA5String(innerBytes, params.name)
 		case TagT61String:
@@ -1103,6 +1108,7 @@ func setDefaultValue(v reflect.Value, params fieldParameters) (ok bool) {
 //	set         causes a SET, rather than a SEQUENCE type to be expected
 //	tag:x       specifies the ASN.1 tag number; implies ASN.1 CONTEXT SPECIFIC
 //	bitset      specifies that a BitString describes a named list of values
+//	lax         relax PrintableString checks for this field, and for any fields within it
 //
 // If the type of the first field of a structure is RawContent then the raw
 // ASN1 contents of the struct will be stored in it.
