@@ -176,32 +176,66 @@ func TestParseBigInt(t *testing.T) {
 	}
 }
 
+func TestBitLength(t *testing.T) {
+	var tests = []struct {
+		in   []byte
+		want int
+	}{
+		{nil, 0},
+		{[]byte{}, 0},
+		{[]byte{0x00}, 0},
+		{[]byte{0x00, 0x00}, 0},
+		{[]byte{0xf0}, 4},
+		{[]byte{0x88}, 5},
+		{[]byte{0xff}, 8},
+		{[]byte{0xff, 0x80}, 9},
+		{[]byte{0xff, 0x81}, 16},
+		{[]byte{0x00, 0x00, 0x01}, 24},
+		{[]byte{0x00, 0x00, 0x02}, 23},
+		{[]byte{0x00, 0x00, 0x04}, 22},
+		{[]byte{0x00, 0x00, 0x80}, 17},
+		{[]byte{0x00, 0x00, 0x80, 0x00}, 17},
+		{[]byte{0x80}, 1},
+	}
+	for _, test := range tests {
+		got := BitLength(test.in)
+		if got != test.want {
+			t.Errorf("BitLength(%x)=%d, want %d", test.in, got, test.want)
+		}
+	}
+}
+
 type bitStringTest struct {
 	in        []byte
+	bitset    bool
 	ok        bool
 	out       []byte
 	bitLength int
 }
 
 var bitStringTestData = []bitStringTest{
-	{[]byte{}, false, []byte{}, 0},
-	{[]byte{0x00}, true, []byte{}, 0},
-	{[]byte{0x07, 0x00}, true, []byte{0x00}, 1},
-	{[]byte{0x07, 0x01}, false, []byte{}, 0},
-	{[]byte{0x07, 0x40}, false, []byte{}, 0},
-	{[]byte{0x08, 0x00}, false, []byte{}, 0},
+	{[]byte{}, false, false, []byte{}, 0},
+	{[]byte{0x00}, false, true, []byte{}, 0},
+	{[]byte{0x07, 0x00}, false, true, []byte{0x00}, 1},
+	{[]byte{0x07, 0x01}, false, false, []byte{}, 0},
+	{[]byte{0x07, 0x40}, false, false, []byte{}, 0},
+	{[]byte{0x08, 0x00}, false, false, []byte{}, 0},
+	{[]byte{0x07, 0x11, 0x80}, false, true, []byte{0x11, 0x80}, 9},
+	{[]byte{0x07, 0x11, 0x00}, false, true, []byte{0x11, 0x00}, 9},
+	// X.690 11.2.2: trailing zero bits should be omitted in DER encoding
+	// of a named bit list.
+	{[]byte{0x07, 0x11, 0x80}, true, true, []byte{0x11, 0x80}, 9},
+	{[]byte{0x07, 0x11, 0x00}, true, false, []byte{0x11, 0x00}, 9},
 }
 
 func TestBitString(t *testing.T) {
 	for i, test := range bitStringTestData {
-		ret, err := parseBitString(test.in, "fieldname")
+		ret, err := parseBitString(test.in, test.bitset, "fieldname")
 		if (err == nil) != test.ok {
 			t.Errorf("#%d: Incorrect error result (did fail? %v, expected: %v)", i, err == nil, test.ok)
 		}
-		if err == nil {
-			if test.bitLength != ret.BitLength || !bytes.Equal(ret.Bytes, test.out) {
-				t.Errorf("#%d: Bad result: %v (expected %v %v)", i, ret, test.out, test.bitLength)
-			}
+		if test.bitLength != ret.BitLength || !bytes.Equal(ret.Bytes, test.out) {
+			t.Errorf("#%d: Bad result: %v (expected %v %v)", i, ret, test.out, test.bitLength)
 		}
 	}
 }

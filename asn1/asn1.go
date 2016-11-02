@@ -23,6 +23,8 @@
 //       so are not correct DER).
 //     - parseObjectIdentifier() allows zero-length OIDs.
 //  - Better diagnostics on which particular field causes errors.
+//  - Extra "bitset" tag that indicates a field is a named bit list and so
+//    should have trailing zeros removed.
 package asn1
 
 // ASN.1 is a syntax for specifying abstract objects and BER, DER, PER, XER etc
@@ -188,6 +190,7 @@ func parseBigInt(bytes []byte, lax bool, fieldName string) (*big.Int, error) {
 // BitString is the structure to use when you want an ASN.1 BIT STRING type. A
 // bit string is padded up to the nearest byte in memory and the number of
 // valid bits is recorded. Padding bits will be zero.
+// If a BitString field has the "bitset" tag, trailing zero bits will be omitted.
 type BitString struct {
 	Bytes     []byte // bits packed into bytes.
 	BitLength int    // length in bits.
@@ -223,7 +226,7 @@ func (b BitString) RightAlign() []byte {
 }
 
 // parseBitString parses an ASN.1 bit string from the given byte slice and returns it.
-func parseBitString(bytes []byte, fieldName string) (ret BitString, err error) {
+func parseBitString(bytes []byte, bitset bool, fieldName string) (ret BitString, err error) {
 	if len(bytes) == 0 {
 		err = SyntaxError{"zero length BIT STRING", fieldName}
 		return
@@ -237,6 +240,13 @@ func parseBitString(bytes []byte, fieldName string) (ret BitString, err error) {
 	}
 	ret.BitLength = (len(bytes)-1)*8 - paddingBits
 	ret.Bytes = bytes[1:]
+	if bitset {
+		bitLen := BitLength(ret.Bytes)
+		if bitLen != ret.BitLength {
+			err = SyntaxError{"trailing zeros encoded in BIT STRING named list", fieldName}
+			return
+		}
+	}
 	return
 }
 
@@ -778,7 +788,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 			case TagInteger:
 				result, err = parseInt64(innerBytes, params.lax, params.name)
 			case TagBitString:
-				result, err = parseBitString(innerBytes, params.name)
+				result, err = parseBitString(innerBytes, false, params.name)
 			case TagOID:
 				result, err = parseObjectIdentifier(innerBytes, params.lax, params.name)
 			case TagUTCTime:
@@ -929,7 +939,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 		err = err1
 		return
 	case bitStringType:
-		bs, err1 := parseBitString(innerBytes, params.name)
+		bs, err1 := parseBitString(innerBytes, params.bitset, params.name)
 		if err1 == nil {
 			v.Set(reflect.ValueOf(bs))
 		}
@@ -1140,6 +1150,7 @@ func setDefaultValue(v reflect.Value, params fieldParameters) (ok bool) {
 //	set         causes a SET, rather than a SEQUENCE type to be expected
 //	tag:x       specifies the ASN.1 tag number; implies ASN.1 CONTEXT SPECIFIC
 //	lax         relax strict encoding checks for this field, and for any fields within it
+//	bitset      specifies that a BitString describes a named list of values
 //
 // If the type of the first field of a structure is RawContent then the raw
 // ASN1 contents of the struct will be stored in it.

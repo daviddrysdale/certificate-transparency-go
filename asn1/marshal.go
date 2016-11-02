@@ -228,15 +228,38 @@ func appendTagAndLength(dst []byte, t tagAndLength) []byte {
 	return dst
 }
 
-type bitStringEncoder BitString
+type bitStringEncoder struct {
+	data   BitString
+	bitset bool
+}
 
 func (b bitStringEncoder) Len() int {
-	return len(b.Bytes) + 1
+	byteLength := len(b.data.Bytes)
+	if b.bitset {
+		bitLength := BitLength(b.data.Bytes)
+		byteLength = (bitLength + 7) / 8
+	}
+	return 1 + byteLength
 }
 
 func (b bitStringEncoder) Encode(dst []byte) {
-	dst[0] = byte((8 - b.BitLength%8) % 8)
-	if copy(dst[1:], b.Bytes) != len(b.Bytes) {
+	bitLength := b.data.BitLength
+	byteLength := len(b.data.Bytes)
+	if b.bitset {
+		// X.690 11.2.2: 'Where [named bit list], applies, the bitstring shall have all trailing 0 bits removed
+		// before it is encoded.'
+		bitLength = BitLength(b.data.Bytes)
+		if bitLength == 0 {
+			// 'If a bitstring value has no 1 bits, then an encoder shall encode the value with a length of
+			// 1 and an initial octet set to 0'
+			dst[0] = 0
+			return
+		}
+		byteLength = (bitLength + 7) / 8
+	}
+
+	dst[0] = byte((8 - bitLength%8) % 8)
+	if copy(dst[1:], b.data.Bytes[:byteLength]) != byteLength {
 		panic("internal error")
 	}
 }
@@ -425,7 +448,7 @@ func makeBody(value reflect.Value, params fieldParameters) (e encoder, err error
 		}
 		return makeUTCTime(t, params.name)
 	case bitStringType:
-		return bitStringEncoder(value.Interface().(BitString)), nil
+		return bitStringEncoder{data: value.Interface().(BitString), bitset: params.bitset}, nil
 	case objectIdentifierType:
 		return makeObjectIdentifier(value.Interface().(ObjectIdentifier), params.name)
 	case bigIntType:

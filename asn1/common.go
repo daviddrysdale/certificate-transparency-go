@@ -83,6 +83,7 @@ type fieldParameters struct {
 	set          bool   // true iff this should be encoded as a SET
 	omitEmpty    bool   // true iff this should be omitted if empty when marshaling.
 	lax          bool   // true iff unmarshalling should skip some error checks
+	bitset       bool   // true iff this BIT STRING should skip trailing zero bits
 	name         string // name of field for better diagnostics
 
 	// Invariants:
@@ -142,6 +143,8 @@ func parseFieldParameters(str string) (ret fieldParameters) {
 			ret.omitEmpty = true
 		case part == "lax":
 			ret.lax = true
+		case part == "bitset":
+			ret.bitset = true
 		}
 	}
 	return
@@ -183,4 +186,24 @@ func getUniversalType(t reflect.Type) (matchAny bool, tagNumber int, isCompound,
 		return false, TagPrintableString, false, true
 	}
 	return false, 0, false, false
+}
+
+// BitLength returns the bit-length of bitString by considering the
+// most-significant bit in a byte to be the "first" bit. This convention
+// matches ASN.1, but differs from almost everything else.
+func BitLength(bitString []byte) int {
+	bitLen := len(bitString) * 8
+
+	for i := range bitString {
+		b := bitString[len(bitString)-i-1]
+
+		for bit := uint(0); bit < 8; bit++ {
+			if (b>>bit)&1 == 1 {
+				return bitLen
+			}
+			bitLen--
+		}
+	}
+
+	return 0
 }
