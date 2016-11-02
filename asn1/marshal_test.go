@@ -77,6 +77,10 @@ type testAuthKeyID struct {
 	SerialNumber *big.Int `asn1:"optional,tag:2"`
 }
 
+type testBitSet struct {
+	UsageBits BitString `asn1:"bitset"`
+}
+
 type testSET []int
 
 var PST = time.FixedZone("PST", -8*60*60)
@@ -115,6 +119,7 @@ var marshalTests = []marshalTest{
 	{farFuture(), "180f32313030303430353132303130315a"},
 	{generalizedTimeTest{time.Unix(1258325776, 0).UTC()}, "3011180f32303039313131353232353631365a"},
 	{BitString{[]byte{0x80}, 1}, "03020780"},
+	{BitString{[]byte{0x00}, 1}, "03020700"},
 	{BitString{[]byte{0x81, 0xf0}, 12}, "03030481f0"},
 	{ObjectIdentifier([]int{1, 2, 3, 4}), "06032a0304"},
 	{ObjectIdentifier([]int{1, 2, 840, 133549, 1, 1, 5}), "06092a864888932d010105"},
@@ -160,6 +165,10 @@ var marshalTests = []marshalTest{
 	{defaultTest{2}, "3003020102"},
 	{testAuthKeyID{ID: []byte{0x01, 0x02, 0x03, 0x04}, SerialNumber: big.NewInt(0x12233445566)}, "300e8004010203048206012233445566"},
 	{testAuthKeyID{ID: []byte{0x01, 0x02, 0x03, 0x04}}, "3006800401020304"},
+	{testBitSet{UsageBits: BitString{[]byte{0x11, 0x80}, 9}}, "30050303071180"},
+	{testBitSet{UsageBits: BitString{[]byte{0x11, 0x00}, 9}}, "300403020011"},
+	{testBitSet{UsageBits: BitString{[]byte{0x80}, 3}}, "300403020780"},
+	{testBitSet{UsageBits: BitString{[]byte{0x00}, 3}}, "3003030100"},
 }
 
 func TestMarshal(t *testing.T) {
