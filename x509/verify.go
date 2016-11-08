@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -199,7 +200,12 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 	if len(currentChain) > 0 {
 		child := currentChain[len(currentChain)-1]
 		if !bytes.Equal(child.RawIssuer, c.RawSubject) {
-			return CertificateInvalidError{c, NameMismatch}
+			// The DER for cert.issuer/ca.subject doesn't match; try a more general match.
+			// RFC 5280 s7.1 refers to RFC 4518, and s2.1 there implies that transcoding
+			// to a common Unicode format should happen before comparison.
+			if !reflect.DeepEqual(&child.Issuer, &c.Subject) {
+				return CertificateInvalidError{c, NameMismatch}
+			}
 		}
 	}
 
