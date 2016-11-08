@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"reflect"
 	"time"
 
 	"github.com/google/certificate-transparency-go/asn1"
@@ -169,6 +170,19 @@ func (n *Name) FillFromRDNSequence(rdns *RDNSequence) {
 			}
 		}
 	}
+}
+
+// NamesEqual indicates whether two Names are equal
+func NamesEqual(x, y *Name) bool {
+	// RFC 5280 s7.1 requires a comprehensive handling of canonicalization before
+	// comparison, referring to RFC 4518.  Section 2 of RFC 4518 recommends
+	// that string values be transcoded to Unicode and canonicalized before
+	// comparison.
+	//
+	// For the moment, just perform an equality check on the parsed names, which
+	// won't allow for Unicode normalization but will allow for alternative
+	// (e.g. PrintableString, UTF8String) DER encodings of the same name.
+	return reflect.DeepEqual(x, y)
 }
 
 var (

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/certificate-transparency-go/x509/pkix"
 )
 
 // ignoreCN disables interpreting Common Name as a hostname. See issue 24151.
@@ -579,7 +581,10 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 	if !opts.DisableNameChecks && len(currentChain) > 0 {
 		child := currentChain[len(currentChain)-1]
 		if !bytes.Equal(child.RawIssuer, c.RawSubject) {
-			return CertificateInvalidError{c, NameMismatch, ""}
+			// The DER for cert.issuer/ca.subject doesn't match; try a more general match.
+			if !pkix.NamesEqual(&child.Issuer, &c.Subject) {
+				return CertificateInvalidError{c, NameMismatch, ""}
+			}
 		}
 	}
 

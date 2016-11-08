@@ -22,6 +22,7 @@
 //       can be checked with IsFatal(err).
 //     - Support for short bitlength ECDSA curves (in curves.go).
 //     - Optional support for MD5 hash.
+//     - Looser Subject/Issuer matching.
 //  - Certificate Transparency specific function:
 //     - Parsing and marshaling of SCTList extension.
 //     - RemoveSCTList() function for rebuilding CT leaf entry.
