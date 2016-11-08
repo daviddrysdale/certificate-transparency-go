@@ -238,6 +238,21 @@ var verifyTests = []verifyTest{
 		},
 	},
 	{
+		// Check that a leaf including name constraints can be verified.
+		leaf:          nameConstraintsIntermediate1,
+		intermediates: []string{nameConstraintsIntermediate2},
+		roots:         []string{globalSignRoot},
+		currentTime:   1382387896,
+
+		expectedChains: [][]string{
+			{
+				"Virginia Tech Global Qualified Server CA",
+				"Trusted Root CA G2",
+				"GlobalSign Root CA",
+			},
+		},
+	},
+	{
 		// Check that a name constrained intermediate works even when
 		// it lists multiple constraints.
 		leaf:          nameConstraintsLeaf,
