@@ -209,7 +209,7 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 		}
 	}
 
-	if len(c.PermittedDNSDomains) > 0 {
+	if len(c.PermittedDNSDomains) > 0 && len(opts.DNSName) > 0 {
 		ok := false
 		for _, constraint := range c.PermittedDNSDomains {
 			ok = matchNameConstraint(opts.DNSName, constraint)
