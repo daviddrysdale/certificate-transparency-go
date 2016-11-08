@@ -38,7 +38,7 @@ func TestParseECPrivateKey(t *testing.T) {
 		}
 		matches := bytes.Equal(serialized, derBytes)
 		if matches != test.shouldReserialize {
-			t.Fatalf("#%d: when serializing key: matches=%t, should match=%t: original %x, reserialized %x", i, matches, test.shouldReserialize, serialized, derBytes)
+			t.Errorf("#%d: when serializing key: matches=%t, should match=%t: original %x, reserialized %x", i, matches, test.shouldReserialize, derBytes, serialized)
 		}
 	}
 }
