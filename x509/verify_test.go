@@ -296,7 +296,7 @@ var verifyTests = []verifyTest{
 		currentTime: 1475787715,
 		systemSkip:  true,
 
-		errorCallback: expectSubjectIssuerMismatcthError,
+		errorCallback: expectSubjectIssuerMismatchError,
 	},
 	{
 		// An X.509 v1 certificate should not be accepted as an
@@ -390,7 +390,7 @@ func expectHashError(t *testing.T, i int, err error) bool {
 	return true
 }
 
-func expectSubjectIssuerMismatcthError(t *testing.T, i int, err error) (ok bool) {
+func expectSubjectIssuerMismatchError(t *testing.T, i int, err error) (ok bool) {
 	if inval, ok := err.(CertificateInvalidError); !ok || inval.Reason != NameMismatch {
 		t.Errorf("#%d: error was not a NameMismatch: %s", i, err)
 		return false
