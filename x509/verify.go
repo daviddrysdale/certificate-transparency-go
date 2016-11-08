@@ -202,6 +202,7 @@ type VerifyOptions struct {
 	DisableEKUChecks               bool
 	DisablePathLenChecks           bool
 	DisableNameConstraintChecks    bool
+	AllowMD5Before                 time.Time // if zero, do not allow MD5
 	// KeyUsage specifies which Extended Key Usage values are acceptable. A leaf
 	// certificate is accepted if it contains any of the listed values. An empty
 	// list means ExtKeyUsageServerAuth. To accept any key usage, include
@@ -823,7 +824,7 @@ func (c *Certificate) buildChains(cache map[*Certificate][][]*Certificate, curre
 		hintErr  error
 		hintCert *Certificate
 	)
-
+	allowMD5 := c.NotAfter.Before(opts.AllowMD5Before)
 	considerCandidate := func(certType int, candidate *Certificate) {
 		for _, cert := range currentChain {
 			if cert.Equal(candidate) {
@@ -840,7 +841,7 @@ func (c *Certificate) buildChains(cache map[*Certificate][][]*Certificate, curre
 			return
 		}
 
-		if err := c.CheckSignatureFrom(candidate); err != nil {
+		if err := c.checkSignatureFrom(candidate, allowMD5); err != nil {
 			if hintErr == nil {
 				hintErr = err
 				hintCert = candidate
