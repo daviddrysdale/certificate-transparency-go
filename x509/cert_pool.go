@@ -141,3 +141,8 @@ func (s *CertPool) Subjects() [][]byte {
 	}
 	return res
 }
+
+// Certs returns the certificates in the pool
+func (s *CertPool) Certs() []*Certificate {
+	return s.certs
+}
