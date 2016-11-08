@@ -51,6 +51,9 @@ func (e CertificateInvalidError) Error() string {
 	case NotAuthorizedToSign:
 		return "x509: certificate is not authorized to sign other certificates"
 	case Expired:
+		if e.Cert != nil {
+			return fmt.Sprintf("x509: certificate has expired or is not yet valid, [%s, %s]", e.Cert.NotBefore, e.Cert.NotAfter)
+		}
 		return "x509: certificate has expired or is not yet valid"
 	case CANotAuthorizedForThisName:
 		return "x509: a root or intermediate certificate is not authorized to sign in this domain"
