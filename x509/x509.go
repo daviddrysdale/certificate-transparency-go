@@ -1611,26 +1611,6 @@ func reverseBitsInAByte(in byte) byte {
 	return b3
 }
 
-// asn1BitLength returns the bit-length of bitString by considering the
-// most-significant bit in a byte to be the "first" bit. This convention
-// matches ASN.1, but differs from almost everything else.
-func asn1BitLength(bitString []byte) int {
-	bitLen := len(bitString) * 8
-
-	for i := range bitString {
-		b := bitString[len(bitString)-i-1]
-
-		for bit := uint(0); bit < 8; bit++ {
-			if (b>>bit)&1 == 1 {
-				return bitLen
-			}
-			bitLen--
-		}
-	}
-
-	return 0
-}
-
 // OID values for standard extensions from RFC 5280.
 var (
 	OIDExtensionArc                        = asn1.ObjectIdentifier{2, 5, 29} // id-ce RFC5280 s4.2.1
@@ -1708,13 +1688,7 @@ func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.E
 		a[0] = reverseBitsInAByte(byte(template.KeyUsage))
 		a[1] = reverseBitsInAByte(byte(template.KeyUsage >> 8))
 
-		l := 1
-		if a[1] != 0 {
-			l = 2
-		}
-
-		bitString := a[:l]
-		ret[n].Value, err = asn1.Marshal(asn1.BitString{Bytes: bitString, BitLength: asn1BitLength(bitString)})
+		ret[n].Value, err = asn1.MarshalWithParams(asn1.BitString{Bytes: a[:], BitLength: asn1.BitLength(a[:])}, "bitset")
 		if err != nil {
 			return
 		}
