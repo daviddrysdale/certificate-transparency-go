@@ -19,6 +19,7 @@ import (
 	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	_ "crypto/md5"
 	"crypto/rsa"
 	_ "crypto/sha1"
 	_ "crypto/sha256"
@@ -831,6 +832,10 @@ var entrustBrokenSPKI = []byte{
 // CheckSignatureFrom verifies that the signature on c is a valid signature
 // from parent.
 func (c *Certificate) CheckSignatureFrom(parent *Certificate) error {
+	return c.checkSignatureFrom(parent, false)
+}
+
+func (c *Certificate) checkSignatureFrom(parent *Certificate, allowMD5 bool) error {
 	// RFC 5280, 4.2.1.9:
 	// "If the basic constraints extension is not present in a version 3
 	// certificate, or the extension is present but the cA boolean is not
@@ -853,18 +858,18 @@ func (c *Certificate) CheckSignatureFrom(parent *Certificate) error {
 
 	// TODO(agl): don't ignore the path length constraint.
 
-	return parent.CheckSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature)
+	return checkSignature(c.SignatureAlgorithm, c.RawTBSCertificate, c.Signature, parent.PublicKey, allowMD5)
 }
 
 // CheckSignature verifies that signature is a valid signature over signed from
 // c's public key.
 func (c *Certificate) CheckSignature(algo SignatureAlgorithm, signed, signature []byte) error {
-	return checkSignature(algo, signed, signature, c.PublicKey)
+	return checkSignature(algo, signed, signature, c.PublicKey, false)
 }
 
 // CheckSignature verifies that signature is a valid signature over signed from
 // a crypto.PublicKey.
-func checkSignature(algo SignatureAlgorithm, signed, signature []byte, publicKey crypto.PublicKey) (err error) {
+func checkSignature(algo SignatureAlgorithm, signed, signature []byte, publicKey crypto.PublicKey, allowMD5 bool) (err error) {
 	var hashType crypto.Hash
 
 	switch algo {
@@ -876,7 +881,14 @@ func checkSignature(algo SignatureAlgorithm, signed, signature []byte, publicKey
 		hashType = crypto.SHA384
 	case SHA512WithRSA, SHA512WithRSAPSS, ECDSAWithSHA512:
 		hashType = crypto.SHA512
-	case MD2WithRSA, MD5WithRSA:
+	case MD5WithRSA:
+		if allowMD5 {
+			hashType = crypto.MD5
+		} else {
+			return InsecureAlgorithmError(algo)
+		}
+
+	case MD2WithRSA:
 		return InsecureAlgorithmError(algo)
 	default:
 		return ErrUnsupportedAlgorithm
@@ -2491,5 +2503,5 @@ func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error
 
 // CheckSignature reports whether the signature on c is valid.
 func (c *CertificateRequest) CheckSignature() error {
-	return checkSignature(c.SignatureAlgorithm, c.RawTBSCertificateRequest, c.Signature, c.PublicKey)
+	return checkSignature(c.SignatureAlgorithm, c.RawTBSCertificateRequest, c.Signature, c.PublicKey, false)
 }

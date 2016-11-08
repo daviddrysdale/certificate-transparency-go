@@ -42,7 +42,7 @@ func SystemCertPool() (*CertPool, error) {
 // given certificate. If any candidates were rejected then errCert will be set
 // to one of them, arbitrarily, and err will contain the reason that it was
 // rejected.
-func (s *CertPool) findVerifiedParents(cert *Certificate) (parents []int, errCert *Certificate, err error) {
+func (s *CertPool) findVerifiedParents(cert *Certificate, allowMD5 bool) (parents []int, errCert *Certificate, err error) {
 	if s == nil {
 		return
 	}
@@ -56,7 +56,7 @@ func (s *CertPool) findVerifiedParents(cert *Certificate) (parents []int, errCer
 	}
 
 	for _, c := range candidates {
-		if err = cert.CheckSignatureFrom(s.certs[c]); err == nil {
+		if err = cert.checkSignatureFrom(s.certs[c], allowMD5); err == nil {
 			parents = append(parents, c)
 		} else {
 			errCert = s.certs[c]

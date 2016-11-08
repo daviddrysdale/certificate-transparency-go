@@ -155,6 +155,7 @@ type VerifyOptions struct {
 	Roots             *CertPool // if nil, the system roots are used
 	CurrentTime       time.Time // if zero, the current time is used
 	DisableTimeChecks bool
+	AllowMD5Before    time.Time // if zero, do not allow MD5
 	// KeyUsage specifies which Extended Key Usage values are acceptable.
 	// An empty list means ExtKeyUsageServerAuth. Key usage is considered a
 	// constraint down the chain which mirrors Windows CryptoAPI behavior,
@@ -357,7 +358,8 @@ func appendToFreshChain(chain []*Certificate, cert *Certificate) []*Certificate 
 }
 
 func (c *Certificate) buildChains(cache map[int][][]*Certificate, currentChain []*Certificate, opts *VerifyOptions) (chains [][]*Certificate, err error) {
-	possibleRoots, failedRoot, rootErr := opts.Roots.findVerifiedParents(c)
+	allowMD5 := c.NotAfter.Before(opts.AllowMD5Before)
+	possibleRoots, failedRoot, rootErr := opts.Roots.findVerifiedParents(c, allowMD5)
 nextRoot:
 	for _, rootNum := range possibleRoots {
 		root := opts.Roots.certs[rootNum]
@@ -375,7 +377,7 @@ nextRoot:
 		chains = append(chains, appendToFreshChain(currentChain, root))
 	}
 
-	possibleIntermediates, failedIntermediate, intermediateErr := opts.Intermediates.findVerifiedParents(c)
+	possibleIntermediates, failedIntermediate, intermediateErr := opts.Intermediates.findVerifiedParents(c, allowMD5)
 nextIntermediate:
 	for _, intermediateNum := range possibleIntermediates {
 		intermediate := opts.Intermediates.certs[intermediateNum]
