@@ -31,6 +31,7 @@ import (
 	"math/big"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/certificate-transparency-go/asn1"
@@ -162,7 +163,9 @@ type dsaSignature struct {
 type ecdsaSignature dsaSignature
 
 type validity struct {
-	NotBefore, NotAfter time.Time
+	Raw       asn1.RawContent
+	NotBefore time.Time
+	NotAfter  time.Time
 }
 
 type publicKeyInfo struct {
@@ -1359,6 +1362,7 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 	out.Issuer.FillFromRDNSequence(&issuer)
 	out.Subject.FillFromRDNSequence(&subject)
 
+	checkValidity(in.TBSCertificate.Validity, errs)
 	out.NotBefore = in.TBSCertificate.Validity.NotBefore
 	out.NotAfter = in.TBSCertificate.Validity.NotAfter
 
@@ -1558,6 +1562,61 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 	}
 
 	return out
+}
+
+// checkValidity examines the validity information for compliance with RFC 5280
+// section 4.1.2.5.
+func checkValidity(validity validity, errs *Errors) {
+	// Re-parse the ASN.1 to allow us to make more detailed checks
+	var rawValidity struct {
+		NotBefore asn1.RawValue
+		NotAfter  asn1.RawValue
+	}
+	if rest, err := asn1.Unmarshal(validity.Raw, &rawValidity); err != nil {
+		errs.AddID(errAsn1InvalidValidity, err.Error())
+		return
+	} else if len(rest) > 0 {
+		errs.AddID(errAsn1TrailingValidity)
+		return
+	}
+	checkValidDate("NotBefore", validity.NotBefore, rawValidity.NotBefore, errs)
+	checkValidDate("NotAfter", validity.NotAfter, rawValidity.NotAfter, errs)
+}
+
+func checkValidDate(which string, t time.Time, val asn1.RawValue, errs *Errors) {
+	var expectLen int
+	if val.Tag == asn1.TagUTCTime {
+		// UTCTime must be used for dates <= 2049
+		if t.Year() >= 2050 {
+			errs.AddID(errDateLateForUTC, which)
+		}
+		expectLen = 12 // YYMMDDHHMMSS
+	} else if val.Tag == asn1.TagGeneralizedTime {
+		// GeneralizedTime must be used for dates >= 2050
+		if t.Year() < 2050 {
+			errs.AddID(errDateEarlyForGeneralized, which)
+		}
+		expectLen = 14 // YYYYMMDDHHMMSS
+	} else {
+		errs.AddID(errAsn1InvalidValidityTag, val.Tag, which)
+		return
+	}
+	// Must include seconds and trailing Z
+	tstr := string(val.Bytes)
+	if !strings.HasSuffix(tstr, "Z") {
+		errs.AddID(errDateNonZulu, which)
+	}
+	firstNonDigit := strings.IndexFunc(tstr,
+		func(r rune) bool {
+			return (r != '0' && r != '1' && r != '2' && r != '3' && r != '4' &&
+				r != '5' && r != '6' && r != '7' && r != '8' && r != '9')
+		})
+	if firstNonDigit != expectLen {
+		errs.AddID(errDateIncomplete, which)
+	}
+	if strings.ContainsRune(tstr, '.') {
+		errs.AddID(errDateFraction, which)
+	}
 }
 
 // ParseTBSCertificate parses a single TBSCertificate from the given ASN.1 DER data.
@@ -2078,7 +2137,7 @@ func CreateCertificate(rand io.Reader, template, parent *Certificate, pub, priv 
 		SerialNumber:       template.SerialNumber,
 		SignatureAlgorithm: signatureAlgorithm,
 		Issuer:             asn1.RawValue{FullBytes: asn1Issuer},
-		Validity:           validity{template.NotBefore.UTC(), template.NotAfter.UTC()},
+		Validity:           validity{NotBefore: template.NotBefore.UTC(), NotAfter: template.NotAfter.UTC()},
 		Subject:            asn1.RawValue{FullBytes: asn1Subject},
 		PublicKey:          publicKeyInfo{nil, publicKeyAlgorithm, encodedPublicKey},
 		Extensions:         extensions,
