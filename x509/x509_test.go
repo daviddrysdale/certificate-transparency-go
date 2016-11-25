@@ -2667,6 +2667,9 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "DuplicateExtension", in: "testdata/invalid/xf-duplicate-extension.pem", wantErr: "occurs more than once", wantFatal: true},
 		{desc: "CriticalExtension", in: "testdata/invalid/xf-ext-auth-info-critical.pem", wantErr: "marked as critical"},
 		{desc: "NonCriticalExtension", in: "testdata/invalid/xf-ext-key-usage-noncritical.pem", wantErr: "marked as non-critical"},
+		{desc: "KeyUsageNonDER", in: "testdata/invalid/xf-ext-key-usage-wrong-der.pem", wantErr: "trailing zeros"},
+		{desc: "KeyUsageTooManyBits", in: "testdata/invalid/xf-ext-key-usage-too-long.pem", wantErr: "incorrect number of bits"},
+		{desc: "KeyUsageEmpty", in: "testdata/invalid/xf-ext-key-usage-empty.pem", wantErr: "no bits set"},
 	}
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {

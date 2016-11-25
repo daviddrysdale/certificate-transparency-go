@@ -43,6 +43,7 @@
 //     - Date formats
 //     - Duplicate extensions
 //     - Extension critical status
+//     - Key usage details
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Support unique IDs
@@ -1888,10 +1889,21 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 			case OIDExtensionKeyUsage[3]:
 				// RFC 5280, 4.2.1.3
 				var usageBits asn1.BitString
-				if rest, err := asn1.Unmarshal(e.Value, &usageBits); err != nil {
+				rest, err := asn1.UnmarshalWithParams(e.Value, &usageBits, "bitset")
+				if err != nil {
+					// The key usage is a named bit list, and so DER requires that trailing
+					// zeros be removed.  However, this is not always complied with so
+					// try not treating the BIT STRING as a named bit list.
+					nfe.AddError(fmt.Errorf("x509: KeyUsage parse error: %v", err))
+					rest, err = asn1.Unmarshal(e.Value, &usageBits)
+				}
+				if err != nil {
 					return nil, err
 				} else if len(rest) != 0 {
 					return nil, errors.New("x509: trailing data after X.509 KeyUsage")
+				}
+				if usageBits.BitLength > 9 {
+					nfe.AddError(fmt.Errorf("x509: KeyUsage extension with incorrect number of bits (%d not 9)", usageBits.BitLength))
 				}
 
 				var usage int
@@ -1899,6 +1911,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					if usageBits.At(i) != 0 {
 						usage |= 1 << uint(i)
 					}
+				}
+				if usage == 0 {
+					nfe.AddError(errors.New("x509: KeyUsage extension with no bits set"))
 				}
 				out.KeyUsage = KeyUsage(usage)
 
