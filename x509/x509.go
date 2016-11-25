@@ -1379,6 +1379,11 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 	out.NotAfter = in.TBSCertificate.Validity.NotAfter
 
 	for _, e := range in.TBSCertificate.Extensions {
+		if oidInExtensions(e.Id, out.Extensions) {
+			errs.AddID(errDuplicateExtension, e.Id)
+			// Only process the first of a set of duplicate extensions
+			continue
+		}
 		out.Extensions = append(out.Extensions, e)
 		unhandled := false
 
