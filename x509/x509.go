@@ -1114,8 +1114,14 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, errs *Error
 		p := new(pkcs1PublicKey)
 		rest, err := asn1.Unmarshal(asn1Data, p)
 		if err != nil {
-			errs.addIDFatal(errAsn1InvalidPubKeyRsa, err.Error())
-			return nil
+			var err2 error
+			rest, err2 = asn1.UnmarshalWithParams(asn1Data, p, "lax")
+			if err2 != nil {
+				errs.addIDFatal(errAsn1InvalidPubKeyRsa, err2.Error())
+				return nil
+			} else {
+				errs.AddID(errAsn1InvalidPubKeyRsaLax, err.Error())
+			}
 		}
 		if len(rest) != 0 {
 			errs.addIDFatal(errAsn1TrailingPubKeyRsa)
@@ -1137,8 +1143,14 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, errs *Error
 		var p *big.Int
 		rest, err := asn1.Unmarshal(asn1Data, &p)
 		if err != nil {
-			errs.addIDFatal(errAsn1InvalidPubKeyDsa, err.Error())
-			return nil
+			var err2 error
+			rest, err2 = asn1.UnmarshalWithParams(asn1Data, &p, "lax")
+			if err2 != nil {
+				errs.addIDFatal(errAsn1InvalidPubKeyDsa, err2.Error())
+				return nil
+			} else {
+				errs.AddID(errAsn1InvalidPubKeyDsaLax, err.Error())
+			}
 		}
 		if len(rest) != 0 {
 			errs.addIDFatal(errAsn1TrailingPubKeyDsa)
@@ -1170,8 +1182,14 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, errs *Error
 		namedCurveOID := new(asn1.ObjectIdentifier)
 		rest, err := asn1.Unmarshal(paramsData, namedCurveOID)
 		if err != nil {
-			errs.addIDFatal(errAsn1InvalidPubKeyEcdsa, err.Error())
-			return nil
+			var err2 error
+			rest, err2 = asn1.UnmarshalWithParams(paramsData, namedCurveOID, "lax")
+			if err2 != nil {
+				errs.addIDFatal(errAsn1InvalidPubKeyEcdsa, err2.Error())
+				return nil
+			} else {
+				errs.AddID(errAsn1InvalidPubKeyEcdsaLax, err.Error())
+			}
 		}
 		if len(rest) != 0 {
 			errs.addIDFatal(errAsn1TrailingPubKeyEcdsa)
@@ -1311,14 +1329,30 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 	out.SerialNumber = in.TBSCertificate.SerialNumber
 
 	var issuer, subject pkix.RDNSequence
-	if rest, err := asn1.Unmarshal(in.TBSCertificate.Subject.FullBytes, &subject); err != nil {
-		errs.addIDFatal(errAsn1InvalidSubject, err.Error())
-	} else if len(rest) != 0 {
+	rest, err := asn1.Unmarshal(in.TBSCertificate.Subject.FullBytes, &subject)
+	if err != nil {
+		var err2 error
+		rest, err2 = asn1.UnmarshalWithParams(in.TBSCertificate.Subject.FullBytes, &subject, "lax")
+		if err2 != nil {
+			errs.addIDFatal(errAsn1InvalidSubject, err2.Error())
+		} else {
+			errs.AddID(errAsn1InvalidSubjectLax, err.Error())
+		}
+	}
+	if len(rest) != 0 {
 		errs.addIDFatal(errAsn1TrailingSubject)
 	}
-	if rest, err := asn1.Unmarshal(in.TBSCertificate.Issuer.FullBytes, &issuer); err != nil {
-		errs.addIDFatal(errAsn1InvalidIssuer, err.Error())
-	} else if len(rest) != 0 {
+	rest, err = asn1.Unmarshal(in.TBSCertificate.Issuer.FullBytes, &issuer)
+	if err != nil {
+		var err2 error
+		rest, err2 = asn1.UnmarshalWithParams(in.TBSCertificate.Issuer.FullBytes, &issuer, "lax")
+		if err2 != nil {
+			errs.addIDFatal(errAsn1InvalidIssuer, err2.Error())
+		} else {
+			errs.AddID(errAsn1InvalidIssuerLax, err.Error())
+		}
+	}
+	if len(rest) != 0 {
 		errs.addIDFatal(errAsn1TrailingIssuer)
 	}
 
@@ -1529,12 +1563,29 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 // ParseTBSCertificate parses a single TBSCertificate from the given ASN.1 DER data.
 // The parsed data is returned in a Certificate struct for ease of access.
 func ParseTBSCertificate(asn1Data []byte) (*Certificate, error) {
+	cert, errs := ParseTBSCertificateLax(asn1Data)
+	err := errs.FirstFatal()
+	if err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// ParseTBSCertificateLax parses a single TBSCertificate from the given ASN.1 DER data.
+// The parsed data is returned in a Certificate struct for ease of access.
+func ParseTBSCertificateLax(asn1Data []byte) (*Certificate, Errors) {
 	var tbsCert tbsCertificate
 	var errs Errors
 	rest, err := asn1.Unmarshal(asn1Data, &tbsCert)
 	if err != nil {
-		errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
-		return nil, &errs
+		var laxErr error
+		rest, laxErr = asn1.UnmarshalWithParams(asn1Data, &tbsCert, "lax")
+		if laxErr != nil {
+			errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
+			return nil, errs
+		}
+		// Lax ASN.1 parsing allows this cert, so continue but remember the error.
+		errs.AddID(errAsn1CertificateLaxDecodingRequired, err.Error())
 	}
 	if len(rest) > 0 {
 		errs.addIDFatal(errAsn1TrailingCertificate)
@@ -1542,43 +1593,73 @@ func ParseTBSCertificate(asn1Data []byte) (*Certificate, error) {
 	cert := parseCertificate(&certificate{
 		Raw:            tbsCert.Raw,
 		TBSCertificate: tbsCert}, &errs)
-	return cert, &errs
+	return cert, errs
 }
 
 // ParseCertificate parses a single certificate from the given ASN.1 DER data.
 func ParseCertificate(asn1Data []byte) (*Certificate, error) {
+	cert, errs := ParseCertificateLax(asn1Data)
+	err := errs.FirstFatal()
+	if err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// ParseCertificateLax parses a single certificate from the given ASN.1 DER data, with minimal checks on certificate validity.
+func ParseCertificateLax(asn1Data []byte) (*Certificate, Errors) {
 	var cert certificate
 	var errs Errors
 	rest, err := asn1.Unmarshal(asn1Data, &cert)
 	if err != nil {
-		errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
-		return nil, &errs
+		var laxErr error
+		rest, laxErr = asn1.UnmarshalWithParams(asn1Data, &cert, "lax")
+		if laxErr != nil {
+			errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
+			return nil, errs
+		}
+		// Lax ASN.1 parsing allows this cert, so continue but remember the error.
+		errs.AddID(errAsn1CertificateLaxDecodingRequired, err.Error())
 	}
 	if len(rest) > 0 {
 		errs.addIDFatal(errAsn1TrailingCertificate)
 	}
 
 	parsedCert := parseCertificate(&cert, &errs)
-	if err := errs.FirstFatal(); err != nil {
-		return nil, err
-	}
-	return parsedCert, nil
+	return parsedCert, errs
 }
 
 // ParseCertificates parses one or more certificates from the given ASN.1 DER
 // data. The certificates must be concatenated with no intermediate padding.
 func ParseCertificates(asn1Data []byte) ([]*Certificate, error) {
+	results, errs := ParseCertificatesLax(asn1Data)
+	err := errs.FirstFatal()
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// ParseCertificatesLax parses one or more certificates from the given ASN.1 DER data, with minimal checks on
+// certificate validity. The certificates must be concatenated with no intermediate padding.
+func ParseCertificatesLax(asn1Data []byte) ([]*Certificate, Errors) {
 	var v []*certificate
 	var errs Errors
 
 	for len(asn1Data) > 0 {
 		cert := new(certificate)
-		var err error
-		asn1Data, err = asn1.Unmarshal(asn1Data, cert)
+		rest, err := asn1.Unmarshal(asn1Data, cert)
 		if err != nil {
-			errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
-			return nil, &errs
+			var laxErr error
+			rest, laxErr = asn1.UnmarshalWithParams(asn1Data, cert, "lax")
+			if laxErr != nil {
+				errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
+				return nil, errs
+			}
+			// Lax ASN.1 parsing allows this cert, so continue but remember the error.
+			errs.AddID(errAsn1CertificateLaxDecodingRequired, err.Error())
 		}
+		asn1Data = rest
 		v = append(v, cert)
 	}
 
@@ -1587,10 +1668,8 @@ func ParseCertificates(asn1Data []byte) ([]*Certificate, error) {
 		cert := parseCertificate(ci, &errs)
 		ret[i] = cert
 	}
-	if err := errs.FirstFatal(); err != nil {
-		return nil, err
-	}
-	return ret, nil
+
+	return ret, errs
 }
 
 func reverseBitsInAByte(in byte) byte {
