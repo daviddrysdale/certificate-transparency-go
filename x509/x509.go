@@ -61,7 +61,7 @@ func ParsePKIXPublicKey(derBytes []byte) (pub interface{}, err error) {
 	} else if len(rest) != 0 {
 		return nil, errors.New("x509: trailing data after ASN.1 of public-key")
 	}
-	algo := getPublicKeyAlgorithmFromOID(pki.Algorithm.Algorithm)
+	algo, _ := getPublicKeyAlgorithmFromOID(pki.Algorithm.Algorithm)
 	if algo == UnknownPublicKeyAlgorithm {
 		return nil, errors.New("x509: unknown public key algorithm")
 	}
@@ -478,16 +478,18 @@ var (
 	OIDPublicKeyRSAObsolete = asn1.ObjectIdentifier{2, 5, 8, 1, 1}
 )
 
-func getPublicKeyAlgorithmFromOID(oid asn1.ObjectIdentifier) PublicKeyAlgorithm {
+func getPublicKeyAlgorithmFromOID(oid asn1.ObjectIdentifier) (PublicKeyAlgorithm, bool) {
 	switch {
 	case oid.Equal(OIDPublicKeyRSA):
-		return RSA
+		return RSA, false
 	case oid.Equal(OIDPublicKeyDSA):
-		return DSA
+		return DSA, false
 	case oid.Equal(OIDPublicKeyECDSA):
-		return ECDSA
+		return ECDSA, false
+	case oid.Equal(OIDPublicKeyRSAObsolete):
+		return RSA, true
 	}
-	return UnknownPublicKeyAlgorithm
+	return UnknownPublicKeyAlgorithm, false
 }
 
 // RFC 5480, 2.1.1.1. Named Curve
@@ -1323,9 +1325,19 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 
 	out.Signature = in.SignatureValue.RightAlign()
 	out.SignatureAlgorithm = SignatureAlgorithmFromAI(in.TBSCertificate.SignatureAlgorithm)
+	if out.SignatureAlgorithm == UnknownSignatureAlgorithm {
+		errs.AddID(errSignatureAlgorithmUnknown, in.TBSCertificate.SignatureAlgorithm.Algorithm)
+	}
 
-	out.PublicKeyAlgorithm =
+	var obsolete bool
+	out.PublicKeyAlgorithm, obsolete =
 		getPublicKeyAlgorithmFromOID(in.TBSCertificate.PublicKey.Algorithm.Algorithm)
+	if out.PublicKeyAlgorithm == UnknownPublicKeyAlgorithm {
+		errs.AddID(errPublicKeyAlgorithmUnknown, in.TBSCertificate.PublicKey.Algorithm.Algorithm)
+	}
+	if obsolete {
+		errs.AddID(errPublicKeyAlgorithmObsoleteOID, in.TBSCertificate.PublicKey.Algorithm.Algorithm)
+	}
 	out.PublicKey = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCertificate.PublicKey, errs)
 
 	out.Version = in.TBSCertificate.Version + 1
@@ -2583,6 +2595,7 @@ func ParseCertificateRequest(asn1Data []byte) (*CertificateRequest, error) {
 }
 
 func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error) {
+	pubKeyAlgo, _ := getPublicKeyAlgorithmFromOID(in.TBSCSR.PublicKey.Algorithm.Algorithm)
 	out := &CertificateRequest{
 		Raw: in.Raw,
 		RawTBSCertificateRequest: in.TBSCSR.Raw,
@@ -2592,7 +2605,7 @@ func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error
 		Signature:          in.SignatureValue.RightAlign(),
 		SignatureAlgorithm: SignatureAlgorithmFromAI(in.SignatureAlgorithm),
 
-		PublicKeyAlgorithm: getPublicKeyAlgorithmFromOID(in.TBSCSR.PublicKey.Algorithm.Algorithm),
+		PublicKeyAlgorithm: pubKeyAlgo,
 
 		Version:    in.TBSCSR.Version,
 		Attributes: parseRawAttributes(in.TBSCSR.RawAttributes),
