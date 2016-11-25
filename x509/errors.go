@@ -43,6 +43,7 @@ const (
 	errAsn1InvalidIssuerLax
 	errAsn1TrailingIssuer
 	errAsn1InvalidKeyUsage
+	errAsn1InvalidKeyUsageTrailingZeros
 	errAsn1TrailingKeyUsage
 	errAsn1InvalidBasicConstraints
 	errAsn1TrailingBasicConstraints
@@ -452,6 +453,13 @@ var errorInfo = []Error{
 		SpecRef:  "RFC 5280 s4.2.1.3",
 		Category: InvalidASN1Content,
 		Fatal:    true,
+	},
+	{
+		ID:       errAsn1InvalidKeyUsageTrailingZeros,
+		Summary:  "%v",
+		Field:    "tbsCertificate.extensions.KeyUsage",
+		SpecRef:  "RFC 5280 s4.2.1.3",
+		Category: InvalidASN1Content,
 	},
 	{
 		ID:       errAsn1TrailingKeyUsage,

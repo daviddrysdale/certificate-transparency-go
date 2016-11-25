@@ -1375,10 +1375,21 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 			case OIDExtensionKeyUsage[3]:
 				// RFC 5280, 4.2.1.3
 				var usageBits asn1.BitString
-				if rest, err := asn1.Unmarshal(e.Value, &usageBits); err != nil {
+				rest, err := asn1.UnmarshalWithParams(e.Value, &usageBits, "bitset")
+				if err != nil {
+					// The key usage is a named bit list, and so DER requires that trailing
+					// zeros be removed.  However, this is not always complied with so
+					// try not treating the BIT STRING as a named bit list.
+					errs.AddID(errAsn1InvalidKeyUsageTrailingZeros, err.Error())
+					rest, err = asn1.Unmarshal(e.Value, &usageBits)
+				}
+				if err != nil {
 					errs.addIDFatal(errAsn1InvalidKeyUsage, err.Error())
 				} else if len(rest) != 0 {
 					errs.addIDFatal(errAsn1TrailingKeyUsage)
+				}
+				if usageBits.BitLength > 9 {
+					errs.AddID(errKeyUsageWrongBitCount, usageBits.BitLength)
 				}
 
 				var usage int
@@ -1386,6 +1397,9 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 					if usageBits.At(i) != 0 {
 						usage |= 1 << uint(i)
 					}
+				}
+				if usage == 0 {
+					errs.AddID(errKeyUsageEmpty)
 				}
 				out.KeyUsage = KeyUsage(usage)
 

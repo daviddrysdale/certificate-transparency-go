@@ -976,7 +976,7 @@ func TestCRLCreation(t *testing.T) {
 	block, _ := pem.Decode([]byte(pemPrivateKey))
 	priv, _ := ParsePKCS1PrivateKey(block.Bytes)
 	block, _ = pem.Decode([]byte(pemCertificate))
-	cert, _ := ParseCertificate(block.Bytes)
+	cert, _ := ParseCertificateLax(block.Bytes)
 
 	loc := time.FixedZone("Oz/Atlantis", int((2 * time.Hour).Seconds()))
 
