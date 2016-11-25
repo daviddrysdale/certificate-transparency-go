@@ -41,6 +41,7 @@
 //     - Support for parsing RSASES-OAEP public keys from certificates
 //  - Additional checks (with non-fatal errors):
 //     - Date formats
+//     - Duplicate extensions
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Export and use OID values throughout.
@@ -1861,6 +1862,10 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 	out.NotAfter = in.TBSCertificate.Validity.NotAfter
 
 	for _, e := range in.TBSCertificate.Extensions {
+		if oidInExtensions(e.Id, out.Extensions) {
+			// Duplicate extension is fatal: what if different parsers pick different instances?
+			return nil, fmt.Errorf("x509: extension %v occurs more than once", e.Id)
+		}
 		out.Extensions = append(out.Extensions, e)
 		unhandled := false
 
