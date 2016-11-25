@@ -39,6 +39,8 @@
 //     - Support for RFC3779 extensions (in rpki.go)
 //  - RSAES-OAEP support:
 //     - Support for parsing RSASES-OAEP public keys from certificates
+//  - Additional checks (with non-fatal errors):
+//     - Date formats
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Export and use OID values throughout.
@@ -216,6 +218,7 @@ type dsaSignature struct {
 type ecdsaSignature dsaSignature
 
 type validity struct {
+	Raw                 asn1.RawContent
 	NotBefore, NotAfter time.Time
 }
 
@@ -1853,6 +1856,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 	out.Issuer.FillFromRDNSequence(&issuer)
 	out.Subject.FillFromRDNSequence(&subject)
 
+	checkValidity(in.TBSCertificate.Validity, &nfe)
 	out.NotBefore = in.TBSCertificate.Validity.NotBefore
 	out.NotAfter = in.TBSCertificate.Validity.NotAfter
 
@@ -2112,6 +2116,58 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 		return out, nfe
 	}
 	return out, nil
+}
+
+// checkValidity examines the validity information for compliance with RFC 5280
+// section 4.1.2.5.
+func checkValidity(validity validity, nfe *NonFatalErrors) {
+	// Re-parse the ASN.1 to allow us to make more detailed checks
+	var rawValidity struct {
+		NotBefore asn1.RawValue
+		NotAfter  asn1.RawValue
+	}
+	if rest, err := asn1.Unmarshal(validity.Raw, &rawValidity); err != nil {
+		nfe.AddError(fmt.Errorf("x509: failed to unmarshal validity information: %v", err))
+	} else if len(rest) > 0 {
+		nfe.AddError(errors.New("x509: trailing data after validity information"))
+	}
+	checkValidDate("NotBefore", validity.NotBefore, rawValidity.NotBefore, nfe)
+	checkValidDate("NotAfter", validity.NotAfter, rawValidity.NotAfter, nfe)
+}
+
+func checkValidDate(which string, t time.Time, val asn1.RawValue, nfe *NonFatalErrors) {
+	var expectLen int
+	if val.Tag == asn1.TagUTCTime {
+		// UTCTime must be used for dates <= 2049
+		if t.Year() >= 2050 {
+			nfe.AddError(fmt.Errorf("x509: date in UTCTime for validity.%s is after 2050", which))
+		}
+		expectLen = 12 // YYMMDDHHMMSS
+	} else if val.Tag == asn1.TagGeneralizedTime {
+		// GeneralizedTime must be used for dates >= 2050
+		if t.Year() < 2050 {
+			nfe.AddError(fmt.Errorf("x509: date in GeneralizedTime for validity.%s is before 2050", which))
+		}
+		expectLen = 14 // YYYYMMDDHHMMSS
+	} else {
+		nfe.AddError(fmt.Errorf("x509: invalid tag %d for validity.%s", val.Tag, which))
+	}
+	// Must include seconds and trailing Z
+	tstr := string(val.Bytes)
+	if !strings.HasSuffix(tstr, "Z") {
+		nfe.AddError(fmt.Errorf("x509: date for validity.%s is not in Zulu time", which))
+	}
+	firstNonDigit := strings.IndexFunc(tstr,
+		func(r rune) bool {
+			return (r != '0' && r != '1' && r != '2' && r != '3' && r != '4' &&
+				r != '5' && r != '6' && r != '7' && r != '8' && r != '9')
+		})
+	if firstNonDigit != expectLen {
+		nfe.AddError(fmt.Errorf("x509: date for validity.%s is incomplete", which))
+	}
+	if strings.ContainsRune(tstr, '.') {
+		nfe.AddError(fmt.Errorf("x509: date for validity.%s includes fractional seconds", which))
+	}
 }
 
 // ParseTBSCertificate parses a single TBSCertificate from the given ASN.1 DER data.
@@ -2775,7 +2831,7 @@ func CreateCertificate(rand io.Reader, template, parent *Certificate, pub, priv 
 		SerialNumber:       template.SerialNumber,
 		SignatureAlgorithm: signatureAlgorithm,
 		Issuer:             asn1.RawValue{FullBytes: asn1Issuer},
-		Validity:           validity{template.NotBefore.UTC(), template.NotAfter.UTC()},
+		Validity:           validity{NotBefore: template.NotBefore.UTC(), NotAfter: template.NotAfter.UTC()},
 		Subject:            asn1.RawValue{FullBytes: asn1Subject},
 		PublicKey:          publicKeyInfo{nil, publicKeyAlgorithm, encodedPublicKey},
 		Extensions:         extensions,
@@ -3240,7 +3296,7 @@ func ParseCertificateRequest(asn1Data []byte) (*CertificateRequest, error) {
 
 func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error) {
 	out := &CertificateRequest{
-		Raw: in.Raw,
+		Raw:                      in.Raw,
 		RawTBSCertificateRequest: in.TBSCSR.Raw,
 		RawSubjectPublicKeyInfo:  in.TBSCSR.PublicKey.Raw,
 		RawSubject:               in.TBSCSR.Subject.FullBytes,

@@ -2197,6 +2197,87 @@ func TestMultipleRDN(t *testing.T) {
 	}
 }
 
+func TestCheckValidDate(t *testing.T) {
+	when2017 := time.Date(2017, 11, 17, 23, 59, 59, 0, time.UTC)
+	when2051 := time.Date(2051, 11, 17, 23, 59, 59, 0, time.UTC)
+	hexify := func(s string) string {
+		return hex.EncodeToString([]byte(s))
+	}
+	var tests = []struct {
+		in   string // as hex
+		when time.Time
+		want string
+	}{
+		{
+			in:   "170d" + hexify("171117235959Z"),
+			when: when2017,
+		},
+		{
+			in:   "170c" + hexify("171117235959"),
+			when: when2017,
+			want: "not in Zulu time",
+		},
+		{
+			in:   "170d" + hexify("511117235959Z"),
+			when: when2051,
+			want: "after 2050",
+		},
+		{
+			in:   "170b" + hexify("1711172359Z"),
+			when: when2017,
+			want: "incomplete",
+		},
+		{
+			in:   "1710" + hexify("171117235959.00Z"),
+			when: when2017,
+			want: "fractional seconds",
+		},
+		{
+			in:   "180f" + hexify("20511117235959Z"),
+			when: when2051,
+		},
+		{
+			in:   "180f" + hexify("20171117235959Z"),
+			when: when2017,
+			want: "before 2050",
+		},
+		{
+			in:   "180e" + hexify("20511117235959"),
+			when: when2051,
+			want: "not in Zulu time",
+		},
+		{
+			in:   "1812" + hexify("20511117235959.00Z"),
+			when: when2051,
+			want: "fractional seconds",
+		},
+		{
+			in:   "180d" + hexify("205111172359Z"),
+			when: when2051,
+			want: "incomplete",
+		},
+		{
+			in:   "130e" + hexify("20511117235959"),
+			when: when2051,
+			want: "invalid tag",
+		},
+	}
+
+	for _, test := range tests {
+		data, _ := hex.DecodeString(test.in)
+		var raw asn1.RawValue
+		if _, err := asn1.Unmarshal(data, &raw); err != nil {
+			t.Errorf("failed to decode test data %x: %v", data, err)
+			continue
+		}
+		var got NonFatalErrors
+		checkValidDate("test", test.when, raw, &got)
+		if !strings.Contains(got.Error(), test.want) {
+			t.Errorf("checkValidDate(%v, %+v)=%v, want err containing %q", test.when, raw, got, test.want)
+		}
+	}
+}
+
 func TestSystemCertPool(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("not implemented on Windows; Issue 16736, 18609")
@@ -2482,6 +2563,8 @@ func TestAdditionFieldsInGeneralSubtree(t *testing.T) {
 
 func TestEmptySubject(t *testing.T) {
 	template := Certificate{
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(30 * 24 * time.Hour),
 		SerialNumber: big.NewInt(1),
 		DNSNames:     []string{"example.com"},
 	}
