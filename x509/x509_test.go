@@ -16,7 +16,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -1080,22 +1079,6 @@ func TestParsePEMCRL(t *testing.T) {
 	}
 
 	// Can't check the signature here without a package cycle.
-}
-
-func TestNonFatalErrors(t *testing.T) {
-	nfe := NonFatalErrors{}
-
-	nfe.AddError(errors.New("one"))
-	nfe.AddError(errors.New("two"))
-	nfe.AddError(errors.New("three"))
-
-	if !nfe.HasError() {
-		t.Fatal("NonFatalError claimed not to have an error")
-	}
-
-	if !strings.Contains(nfe.Error(), "one; two; three") {
-		t.Fatalf("Didn't see expected string from Error(), got '%s'", nfe.Error())
-	}
 }
 
 const (

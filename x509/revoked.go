@@ -232,10 +232,8 @@ func ParseCertificateListDER(derBytes []byte) (*CertificateList, error) {
 			parseIssuingDistributionPoint(e.Value, &certList.TBSCertList.IssuingDistributionPoint, &certList.TBSCertList.IssuingDPFullNames, &errs)
 		case e.Id.Equal(OIDExtensionFreshestCRL):
 			// RFC 5280 s5.2.6
-			if err := parseDistributionPoints(e.Value, &certList.TBSCertList.FreshestCRLDistributionPoint); err != nil {
-				errs.addIDFatal(ErrInvalidCertListFreshestCRL, err)
-				return nil, err
-			}
+			parseDistributionPoints(e.Value, &certList.TBSCertList.FreshestCRLDistributionPoint, &errs)
+			// TODO(drysdale): fix error ID mapping for different cases: errs.AddID(ErrInvalidCertListFreshestCRL, err)
 		case e.Id.Equal(OIDExtensionAuthorityInfoAccess):
 			// RFC 5280 s5.2.7
 			var aia []authorityInfoAccess

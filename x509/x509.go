@@ -64,7 +64,12 @@ func ParsePKIXPublicKey(derBytes []byte) (pub interface{}, err error) {
 	if algo == UnknownPublicKeyAlgorithm {
 		return nil, errors.New("x509: unknown public key algorithm")
 	}
-	return parsePublicKey(algo, &pki)
+	var errs Errors
+	result := parsePublicKey(algo, &pki, &errs)
+	if errs.Fatal() {
+		return nil, &errs
+	}
+	return result, nil
 }
 
 func marshalPublicKey(pub interface{}) (publicKeyBytes []byte, publicKeyAlgorithm pkix.AlgorithmIdentifier, err error) {
@@ -1096,57 +1101,60 @@ type distributionPointName struct {
 	RelativeName pkix.RDNSequence `asn1:"optional,tag:1"`
 }
 
-func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo) (interface{}, error) {
+func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, errs *Errors) interface{} {
 	asn1Data := keyData.PublicKey.RightAlign()
 	switch algo {
 	case RSA:
 		// RSA public keys must have a NULL in the parameters
 		// (https://tools.ietf.org/html/rfc3279#section-2.3.1).
 		if !bytes.Equal(keyData.Algorithm.Parameters.FullBytes, asn1.NullBytes) {
-			return nil, errors.New("x509: RSA key missing NULL parameters")
+			errs.addIDFatal(errPubKeyRsaMissingParams)
 		}
 
 		p := new(pkcs1PublicKey)
 		rest, err := asn1.Unmarshal(asn1Data, p)
 		if err != nil {
-			return nil, err
+			errs.addIDFatal(errAsn1InvalidPubKeyRsa, err.Error())
+			return nil
 		}
 		if len(rest) != 0 {
-			return nil, errors.New("x509: trailing data after RSA public key")
+			errs.addIDFatal(errAsn1TrailingPubKeyRsa)
 		}
 
 		if p.N.Sign() <= 0 {
-			return nil, errors.New("x509: RSA modulus is not a positive number")
+			errs.addIDFatal(errPubKeyRsaNegModulus)
 		}
 		if p.E <= 0 {
-			return nil, errors.New("x509: RSA public exponent is not a positive number")
+			errs.addIDFatal(errPubKeyRsaNegExponent)
 		}
 
 		pub := &rsa.PublicKey{
 			E: p.E,
 			N: p.N,
 		}
-		return pub, nil
+		return pub
 	case DSA:
 		var p *big.Int
 		rest, err := asn1.Unmarshal(asn1Data, &p)
 		if err != nil {
-			return nil, err
+			errs.addIDFatal(errAsn1InvalidPubKeyDsa, err.Error())
+			return nil
 		}
 		if len(rest) != 0 {
-			return nil, errors.New("x509: trailing data after DSA public key")
+			errs.addIDFatal(errAsn1TrailingPubKeyDsa)
 		}
 		paramsData := keyData.Algorithm.Parameters.FullBytes
 		params := new(dsaAlgorithmParameters)
 		rest, err = asn1.Unmarshal(paramsData, params)
 		if err != nil {
-			return nil, err
+			errs.addIDFatal(errAsn1InvalidPubKeyDsaParams, err.Error())
+			return nil
 		}
 		if len(rest) != 0 {
-			return nil, errors.New("x509: trailing data after DSA parameters")
+			errs.addIDFatal(errAsn1TrailingPubKeyDsaParams)
 		}
 		if p.Sign() <= 0 || params.P.Sign() <= 0 || params.Q.Sign() <= 0 || params.G.Sign() <= 0 {
-			return nil, errors.New("x509: zero or negative DSA parameter")
+			errs.addIDFatal(errPubKeyDsaNegParam)
 		}
 		pub := &dsa.PublicKey{
 			Parameters: dsa.Parameters{
@@ -1156,65 +1164,40 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo) (interface{
 			},
 			Y: p,
 		}
-		return pub, nil
+		return pub
 	case ECDSA:
 		paramsData := keyData.Algorithm.Parameters.FullBytes
 		namedCurveOID := new(asn1.ObjectIdentifier)
 		rest, err := asn1.Unmarshal(paramsData, namedCurveOID)
 		if err != nil {
-			return nil, err
+			errs.addIDFatal(errAsn1InvalidPubKeyEcdsa, err.Error())
+			return nil
 		}
 		if len(rest) != 0 {
-			return nil, errors.New("x509: trailing data after ECDSA parameters")
+			errs.addIDFatal(errAsn1TrailingPubKeyEcdsa)
 		}
 		namedCurve := namedCurveFromOID(*namedCurveOID)
 		if namedCurve == nil {
-			return nil, errors.New("x509: unsupported elliptic curve")
+			errs.addIDFatal(errPubKeyEcdsaUnsupportedCurve, namedCurveOID)
+			return nil
 		}
 		x, y := elliptic.Unmarshal(namedCurve, asn1Data)
 		if x == nil {
-			return nil, errors.New("x509: failed to unmarshal elliptic curve point")
+			errs.addIDFatal(errAsn1InvalidPubKeyEcdsaCurvePt)
 		}
 		pub := &ecdsa.PublicKey{
 			Curve: namedCurve,
 			X:     x,
 			Y:     y,
 		}
-		return pub, nil
+		return pub
 	default:
-		return nil, nil
+		errs.AddID(errPubKeyUnsupportedAlgorithm, keyData.Algorithm)
+		return nil
 	}
 }
 
-// NonFatalErrors is an error type which can hold a number of other errors.
-// It's used to collect a range of non-fatal errors which occur while parsing
-// a certificate, that way we can still match on certs which technically are
-// invalid.
-type NonFatalErrors struct {
-	Errors []error
-}
-
-// Adds an error to the list of errors contained by NonFatalErrors.
-func (e *NonFatalErrors) AddError(err error) {
-	e.Errors = append(e.Errors, err)
-}
-
-// Returns a string consisting of the values of Error() from all of the errors
-// contained in |e|
-func (e NonFatalErrors) Error() string {
-	r := "NonFatalErrors: "
-	for _, err := range e.Errors {
-		r += err.Error() + "; "
-	}
-	return r
-}
-
-// Returns true if |e| contains at least one error
-func (e *NonFatalErrors) HasError() bool {
-	return len(e.Errors) > 0
-}
-
-func parseDistributionPoints(data []byte, crldp *[]string) error {
+func parseDistributionPoints(data []byte, crldp *[]string, errs *Errors) {
 	// CRLDistributionPoints ::= SEQUENCE SIZE (1..MAX) OF DistributionPoint
 	//
 	// DistributionPoint ::= SEQUENCE {
@@ -1228,9 +1211,11 @@ func parseDistributionPoints(data []byte, crldp *[]string) error {
 
 	var cdp []distributionPoint
 	if rest, err := asn1.Unmarshal(data, &cdp); err != nil {
-		return err
+		errs.addIDFatal(errAsn1InvalidCRLDistributionPoints, err.Error())
+		return
 	} else if len(rest) != 0 {
-		return errors.New("x509: trailing data after X.509 CRL distribution point")
+		errs.addIDFatal(errAsn1TrailingCRLDistributionPoints)
+		return
 	}
 
 	for _, dp := range cdp {
@@ -1241,7 +1226,7 @@ func parseDistributionPoints(data []byte, crldp *[]string) error {
 
 		var n asn1.RawValue
 		if _, err := asn1.Unmarshal(dp.DistributionPoint.FullName.Bytes, &n); err != nil {
-			return err
+			errs.addIDFatal(errAsn1InvalidCRLDistributionPointName, err.Error())
 		}
 		// Trailing data after the fullName is
 		// allowed because other elements of
@@ -1251,10 +1236,9 @@ func parseDistributionPoints(data []byte, crldp *[]string) error {
 			*crldp = append(*crldp, string(n.Bytes))
 		}
 	}
-	return nil
 }
 
-func parseSANExtension(value []byte, nfe *NonFatalErrors) (dnsNames, emailAddresses []string, ipAddresses []net.IP, err error) {
+func parseSANExtension(value []byte, errs *Errors) (dnsNames, emailAddresses []string, ipAddresses []net.IP) {
 	// RFC 5280, 4.2.1.6
 
 	// SubjectAltName ::= GeneralNames
@@ -1273,22 +1257,21 @@ func parseSANExtension(value []byte, nfe *NonFatalErrors) (dnsNames, emailAddres
 	//      registeredID                    [8]     OBJECT IDENTIFIER }
 	var seq asn1.RawValue
 	var rest []byte
-	if rest, err = asn1.Unmarshal(value, &seq); err != nil {
-		return
+	if rest, err := asn1.Unmarshal(value, &seq); err != nil {
+		errs.addIDFatal(errAsn1InvalidAltName, "subject", err.Error())
 	} else if len(rest) != 0 {
-		err = errors.New("x509: trailing data after X.509 extension")
-		return
+		errs.addIDFatal(errAsn1TrailingAltName, "subject")
 	}
 	if !seq.IsCompound || seq.Tag != asn1.TagSequence || seq.Class != asn1.ClassUniversal {
-		err = asn1.StructuralError{Msg: "bad SAN sequence"}
-		return
+		errs.addIDFatal(errInvalidAltNameTag, seq.Tag, seq.Class, "subject")
 	}
 
 	rest = seq.Bytes
 	for len(rest) > 0 {
 		var v asn1.RawValue
-		rest, err = asn1.Unmarshal(rest, &v)
-		if err != nil {
+		var err error
+		if rest, err = asn1.Unmarshal(rest, &v); err != nil {
+			errs.addIDFatal(errAsn1InvalidGeneralName, err.Error())
 			return
 		}
 		switch v.Tag {
@@ -1301,7 +1284,7 @@ func parseSANExtension(value []byte, nfe *NonFatalErrors) (dnsNames, emailAddres
 			case net.IPv4len, net.IPv6len:
 				ipAddresses = append(ipAddresses, v.Bytes)
 			default:
-				nfe.AddError(fmt.Errorf("x509: certificate contained IP address of length %d : %v", len(v.Bytes), v.Bytes))
+				errs.AddID(errGeneralNameIPLen, len(v.Bytes), v.Bytes)
 			}
 		}
 	}
@@ -1309,9 +1292,7 @@ func parseSANExtension(value []byte, nfe *NonFatalErrors) (dnsNames, emailAddres
 	return
 }
 
-func parseCertificate(in *certificate) (*Certificate, error) {
-	var nfe NonFatalErrors
-
+func parseCertificate(in *certificate, errs *Errors) *Certificate {
 	out := new(Certificate)
 	out.Raw = in.Raw
 	out.RawTBSCertificate = in.TBSCertificate.Raw
@@ -1324,25 +1305,21 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 
 	out.PublicKeyAlgorithm =
 		getPublicKeyAlgorithmFromOID(in.TBSCertificate.PublicKey.Algorithm.Algorithm)
-	var err error
-	out.PublicKey, err = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCertificate.PublicKey)
-	if err != nil {
-		return nil, err
-	}
+	out.PublicKey = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCertificate.PublicKey, errs)
 
 	out.Version = in.TBSCertificate.Version + 1
 	out.SerialNumber = in.TBSCertificate.SerialNumber
 
 	var issuer, subject pkix.RDNSequence
 	if rest, err := asn1.Unmarshal(in.TBSCertificate.Subject.FullBytes, &subject); err != nil {
-		return nil, err
+		errs.addIDFatal(errAsn1InvalidSubject, err.Error())
 	} else if len(rest) != 0 {
-		return nil, errors.New("x509: trailing data after X.509 subject")
+		errs.addIDFatal(errAsn1TrailingSubject)
 	}
 	if rest, err := asn1.Unmarshal(in.TBSCertificate.Issuer.FullBytes, &issuer); err != nil {
-		return nil, err
+		errs.addIDFatal(errAsn1InvalidIssuer, err.Error())
 	} else if len(rest) != 0 {
-		return nil, errors.New("x509: trailing data after X.509 subject")
+		errs.addIDFatal(errAsn1TrailingIssuer)
 	}
 
 	out.Issuer.FillFromRDNSequence(&issuer)
@@ -1361,9 +1338,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				// RFC 5280, 4.2.1.3
 				var usageBits asn1.BitString
 				if rest, err := asn1.Unmarshal(e.Value, &usageBits); err != nil {
-					return nil, err
+					errs.addIDFatal(errAsn1InvalidKeyUsage, err.Error())
 				} else if len(rest) != 0 {
-					return nil, errors.New("x509: trailing data after X.509 KeyUsage")
+					errs.addIDFatal(errAsn1TrailingKeyUsage)
 				}
 
 				var usage int
@@ -1378,9 +1355,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				// RFC 5280, 4.2.1.9
 				var constraints basicConstraints
 				if rest, err := asn1.Unmarshal(e.Value, &constraints); err != nil {
-					return nil, err
+					errs.addIDFatal(errAsn1InvalidBasicConstraints, err.Error())
 				} else if len(rest) != 0 {
-					return nil, errors.New("x509: trailing data after X.509 BasicConstraints")
+					errs.addIDFatal(errAsn1TrailingBasicConstraints, err.Error())
 				}
 
 				out.BasicConstraintsValid = true
@@ -1390,11 +1367,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				// TODO: map out.MaxPathLen to 0 if it has the -1 default value? (Issue 19285)
 
 			case OIDExtensionSubjectAltName[3]:
-				out.DNSNames, out.EmailAddresses, out.IPAddresses, err = parseSANExtension(e.Value, &nfe)
-				if err != nil {
-					return nil, err
-				}
-
+				out.DNSNames, out.EmailAddresses, out.IPAddresses = parseSANExtension(e.Value, errs)
 				if len(out.DNSNames) == 0 && len(out.EmailAddresses) == 0 && len(out.IPAddresses) == 0 {
 					// If we didn't parse anything then we do the critical check, below.
 					unhandled = true
@@ -1418,46 +1391,41 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 
 				var constraints nameConstraints
 				if rest, err := asn1.Unmarshal(e.Value, &constraints); err != nil {
-					return nil, err
+					errs.addIDFatal(errAsn1InvalidNameConstraints, err.Error())
 				} else if len(rest) != 0 {
-					return nil, errors.New("x509: trailing data after X.509 NameConstraints")
+					errs.addIDFatal(errAsn1TrailingNameConstraints)
 				}
 
-				getDNSNames := func(subtrees []generalSubtree, isCritical bool) (dnsNames []string, err error) {
+				getDNSNames := func(subtrees []generalSubtree, isCritical bool) []string {
+					var dnsNames []string
 					for _, subtree := range subtrees {
 						if len(subtree.Name) == 0 {
 							if isCritical {
-								nfe.AddError(UnhandledCriticalExtension{e.Id})
+								errs.AddID(errCriticalExtensionUnhandled, e.Id)
 							}
 							continue
 						}
 						dnsNames = append(dnsNames, subtree.Name)
 					}
 
-					return dnsNames, nil
+					return dnsNames
 				}
 
-				if out.PermittedDNSDomains, err = getDNSNames(constraints.Permitted, e.Critical); err != nil {
-					return out, err
-				}
-				if out.ExcludedDNSDomains, err = getDNSNames(constraints.Excluded, e.Critical); err != nil {
-					return out, err
-				}
+				out.PermittedDNSDomains = getDNSNames(constraints.Permitted, e.Critical)
+				out.ExcludedDNSDomains = getDNSNames(constraints.Excluded, e.Critical)
 				out.PermittedDNSDomainsCritical = e.Critical
 
 			case OIDExtensionCRLDistributionPoints[3]:
 				// RFC 5280, 4.2.1.13
-				if err := parseDistributionPoints(e.Value, &out.CRLDistributionPoints); err != nil {
-					return nil, err
-				}
+				parseDistributionPoints(e.Value, &out.CRLDistributionPoints, errs)
 
 			case OIDExtensionAuthorityKeyId[3]:
 				// RFC 5280, 4.2.1.1
 				var a authKeyId
 				if rest, err := asn1.Unmarshal(e.Value, &a); err != nil {
-					return nil, err
+					errs.addIDFatal(errAsn1InvalidAuthorityKeyID, err.Error())
 				} else if len(rest) != 0 {
-					return nil, errors.New("x509: trailing data after X.509 authority key-id")
+					errs.addIDFatal(errAsn1TrailingAuthorityKeyID)
 				}
 				out.AuthorityKeyId = a.Id
 
@@ -1472,9 +1440,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 
 				var keyUsage []asn1.ObjectIdentifier
 				if rest, err := asn1.Unmarshal(e.Value, &keyUsage); err != nil {
-					return nil, err
+					errs.addIDFatal(errAsn1InvalidExtKeyUsage, err.Error())
 				} else if len(rest) != 0 {
-					return nil, errors.New("x509: trailing data after X.509 ExtendedKeyUsage")
+					errs.addIDFatal(errAsn1TrailingExtKeyUsage)
 				}
 
 				for _, u := range keyUsage {
@@ -1489,9 +1457,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				// RFC 5280, 4.2.1.2
 				var keyid []byte
 				if rest, err := asn1.Unmarshal(e.Value, &keyid); err != nil {
-					return nil, err
+					errs.addIDFatal(errAsn1InvalidSubjectKeyID, err.Error())
 				} else if len(rest) != 0 {
-					return nil, errors.New("x509: trailing data after X.509 key-id")
+					errs.addIDFatal(errAsn1TrailingSubjectKeyID)
 				}
 				out.SubjectKeyId = keyid
 
@@ -1499,9 +1467,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				// RFC 5280 4.2.1.4: Certificate Policies
 				var policies []policyInformation
 				if rest, err := asn1.Unmarshal(e.Value, &policies); err != nil {
-					return nil, err
+					errs.addIDFatal(errAsn1InvalidCertificatePolicies, err.Error())
 				} else if len(rest) != 0 {
-					return nil, errors.New("x509: trailing data after X.509 certificate policies")
+					errs.addIDFatal(errAsn1TrailingCertificatePolicies)
 				}
 				out.PolicyIdentifiers = make([]asn1.ObjectIdentifier, len(policies))
 				for i, policy := range policies {
@@ -1516,9 +1484,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 			// RFC 5280 4.2.2.1: Authority Information Access
 			var aia []authorityInfoAccess
 			if rest, err := asn1.Unmarshal(e.Value, &aia); err != nil {
-				return nil, err
+				errs.addIDFatal(errAsn1InvalidInfoAccess, "authority", err.Error())
 			} else if len(rest) != 0 {
-				return nil, errors.New("x509: trailing data after X.509 authority information")
+				errs.addIDFatal(errAsn1TrailingInfoAccess, "authority")
 			}
 
 			for _, v := range aia {
@@ -1534,14 +1502,14 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 			}
 		} else if e.Id.Equal(OIDExtensionCTSCT) {
 			if rest, err := asn1.Unmarshal(e.Value, &out.RawSCT); err != nil {
-				nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal SCT list extension: %v", err))
+				errs.AddID(errAsn1InvalidSCT, err.Error())
 			} else if len(rest) != 0 {
-				nfe.AddError(errors.New("trailing data after ASN1-encoded SCT list"))
+				errs.AddID(errAsn1TrailingSCT)
 			} else {
 				if rest, err := tls.Unmarshal(out.RawSCT, &out.SCTList); err != nil {
-					nfe.AddError(fmt.Errorf("failed to tls.Unmarshal SCT list: %v", err))
+					errs.AddID(errAsn1InvalidSCTContents, err.Error())
 				} else if len(rest) != 0 {
-					nfe.AddError(errors.New("trailing data after TLS-encoded SCT list"))
+					errs.AddID(errAsn1TrailingSCTContents, err.Error())
 				}
 			}
 		} else {
@@ -1551,68 +1519,77 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 
 		if e.Critical && unhandled {
 			out.UnhandledCriticalExtensions = append(out.UnhandledCriticalExtensions, e.Id)
+			errs.AddID(errCriticalExtensionUnhandled, e.Id)
 		}
 	}
-	if nfe.HasError() {
-		return out, nfe
-	}
-	return out, nil
+
+	return out
 }
 
 // ParseTBSCertificate parses a single TBSCertificate from the given ASN.1 DER data.
 // The parsed data is returned in a Certificate struct for ease of access.
 func ParseTBSCertificate(asn1Data []byte) (*Certificate, error) {
 	var tbsCert tbsCertificate
+	var errs Errors
 	rest, err := asn1.Unmarshal(asn1Data, &tbsCert)
 	if err != nil {
-		return nil, err
+		errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
+		return nil, &errs
 	}
 	if len(rest) > 0 {
-		return nil, asn1.SyntaxError{Msg: "trailing data"}
+		errs.addIDFatal(errAsn1TrailingCertificate)
 	}
-	return parseCertificate(&certificate{
+	cert := parseCertificate(&certificate{
 		Raw:            tbsCert.Raw,
-		TBSCertificate: tbsCert})
+		TBSCertificate: tbsCert}, &errs)
+	return cert, &errs
 }
 
 // ParseCertificate parses a single certificate from the given ASN.1 DER data.
 func ParseCertificate(asn1Data []byte) (*Certificate, error) {
 	var cert certificate
+	var errs Errors
 	rest, err := asn1.Unmarshal(asn1Data, &cert)
 	if err != nil {
-		return nil, err
+		errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
+		return nil, &errs
 	}
 	if len(rest) > 0 {
-		return nil, asn1.SyntaxError{Msg: "trailing data"}
+		errs.addIDFatal(errAsn1TrailingCertificate)
 	}
 
-	return parseCertificate(&cert)
+	parsedCert := parseCertificate(&cert, &errs)
+	if err := errs.FirstFatal(); err != nil {
+		return nil, err
+	}
+	return parsedCert, nil
 }
 
 // ParseCertificates parses one or more certificates from the given ASN.1 DER
 // data. The certificates must be concatenated with no intermediate padding.
 func ParseCertificates(asn1Data []byte) ([]*Certificate, error) {
 	var v []*certificate
+	var errs Errors
 
 	for len(asn1Data) > 0 {
 		cert := new(certificate)
 		var err error
 		asn1Data, err = asn1.Unmarshal(asn1Data, cert)
 		if err != nil {
-			return nil, err
+			errs.addIDFatal(errAsn1InvalidCertificate, err.Error())
+			return nil, &errs
 		}
 		v = append(v, cert)
 	}
 
 	ret := make([]*Certificate, len(v))
 	for i, ci := range v {
-		cert, err := parseCertificate(ci)
-		if err != nil {
-			return nil, err
-		}
+		cert := parseCertificate(ci, &errs)
 		ret[i] = cert
 	}
-
+	if err := errs.FirstFatal(); err != nil {
+		return nil, err
+	}
 	return ret, nil
 }
 
@@ -2469,10 +2446,10 @@ func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error
 		Attributes: parseRawAttributes(in.TBSCSR.RawAttributes),
 	}
 
-	var err error
-	out.PublicKey, err = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCSR.PublicKey)
-	if err != nil {
-		return nil, err
+	var errs Errors
+	out.PublicKey = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCSR.PublicKey, &errs)
+	if errs.Fatal() {
+		return nil, &errs
 	}
 
 	var subject pkix.RDNSequence
@@ -2484,16 +2461,16 @@ func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error
 
 	out.Subject.FillFromRDNSequence(&subject)
 
+	var err error
 	if out.Extensions, err = parseCSRExtensions(in.TBSCSR.RawAttributes); err != nil {
 		return nil, err
 	}
 
-	var nfe NonFatalErrors
 	for _, extension := range out.Extensions {
 		if extension.Id.Equal(OIDExtensionSubjectAltName) {
-			out.DNSNames, out.EmailAddresses, out.IPAddresses, err = parseSANExtension(extension.Value, &nfe)
-			if err != nil {
-				return nil, err
+			out.DNSNames, out.EmailAddresses, out.IPAddresses = parseSANExtension(extension.Value, &errs)
+			if errs.Fatal() {
+				return nil, &errs
 			}
 		}
 	}
