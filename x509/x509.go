@@ -1386,7 +1386,13 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 		}
 		out.Extensions = append(out.Extensions, e)
 		unhandled := false
-
+		if expectCritical, ok := extensionCritical[e.Id.String()]; ok {
+			if e.Critical && !expectCritical {
+				errs.AddID(errUnexpectedlyCriticalExtension, e.Id)
+			} else if !e.Critical && expectCritical {
+				errs.AddID(errUnexpectedlyNonCriticalExtension, e.Id)
+			}
+		}
 		if len(e.Id) == 4 && e.Id[0] == OIDExtensionArc[0] && e.Id[1] == OIDExtensionArc[1] && e.Id[2] == OIDExtensionArc[2] {
 			switch e.Id[3] {
 			case OIDExtensionKeyUsage[3]:
@@ -1795,6 +1801,26 @@ var (
 	// OIDExtensionCTSCT is defined in RFC 6962 s3.3.
 	OIDExtensionCTSCT = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 4, 2}
 )
+
+// Indication of whether extensions need to be critical or non-critical. Extensions that
+// can be either are omitted from the map.
+var extensionCritical = map[string]bool{
+	OIDExtensionSubjectKeyId.String():               false,
+	OIDExtensionKeyUsage.String():                   true,
+	OIDExtensionAuthorityKeyId.String():             false,
+	OIDExtensionNameConstraints.String():            true,
+	OIDExtensionCRLDistributionPoints.String():      false,
+	OIDExtensionIssuerAltName.String():              false,
+	OIDExtensionSubjectDirectoryAttributes.String(): false,
+	OIDExtensionInhibitAnyPolicy.String():           true,
+	OIDExtensionPolicyConstraints.String():          true,
+	OIDExtensionPolicyMappings.String():             true,
+	OIDExtensionFreshestCRL.String():                false,
+	OIDExtensionAuthorityInfoAccess.String():        false,
+	OIDExtensionSubjectInfoAccess.String():          false,
+	OIDExtensionCTPoison.String():                   true,
+	OIDExtensionCTSCT.String():                      false,
+}
 
 var (
 	OIDAuthorityInfoAccessOCSP    = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 1}
