@@ -2665,6 +2665,8 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "SubjectNonPrintable", in: "testdata/invalid/xf-subject-nonprintable.pem", wantErr: "PrintableString contains invalid character"},
 		{desc: "NegativeRSAModulus", in: "testdata/invalid/xf-pubkey-rsa-modulus-negative.pem", wantErr: "RSA modulus is not a positive number"},
 		{desc: "DuplicateExtension", in: "testdata/invalid/xf-duplicate-extension.pem", wantErr: "occurs more than once", wantFatal: true},
+		{desc: "CriticalExtension", in: "testdata/invalid/xf-ext-auth-info-critical.pem", wantErr: "marked as critical"},
+		{desc: "NonCriticalExtension", in: "testdata/invalid/xf-ext-key-usage-noncritical.pem", wantErr: "marked as non-critical"},
 	}
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {

@@ -42,6 +42,7 @@
 //  - Additional checks (with non-fatal errors):
 //     - Date formats
 //     - Duplicate extensions
+//     - Extension critical status
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Export and use OID values throughout.
@@ -1870,7 +1871,13 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 		}
 		out.Extensions = append(out.Extensions, e)
 		unhandled := false
-
+		if expectCritical, ok := extensionCritical[e.Id.String()]; ok {
+			if e.Critical && !expectCritical {
+				nfe.AddError(fmt.Errorf("x509: extension %v marked as critical but expected to be non-critical", e.Id))
+			} else if !e.Critical && expectCritical {
+				nfe.AddError(fmt.Errorf("x509: extension %v marked as non-critical but expected to be critical", e.Id))
+			}
+		}
 		if len(e.Id) == 4 && e.Id[0] == OIDExtensionArc[0] && e.Id[1] == OIDExtensionArc[1] && e.Id[2] == OIDExtensionArc[2] {
 			switch e.Id[3] {
 			case OIDExtensionKeyUsage[3]:
@@ -2284,6 +2291,26 @@ var (
 	// OIDExtensionASList is defined in RFC 3779 s3.
 	OIDExtensionASList = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 1, 8}
 )
+
+// Indication of whether extensions need to be critical or non-critical. Extensions that
+// can be either are omitted from the map.
+var extensionCritical = map[string]bool{
+	OIDExtensionSubjectKeyId.String():               false,
+	OIDExtensionKeyUsage.String():                   true,
+	OIDExtensionAuthorityKeyId.String():             false,
+	OIDExtensionNameConstraints.String():            true,
+	OIDExtensionCRLDistributionPoints.String():      false,
+	OIDExtensionIssuerAltName.String():              false,
+	OIDExtensionSubjectDirectoryAttributes.String(): false,
+	OIDExtensionInhibitAnyPolicy.String():           true,
+	OIDExtensionPolicyConstraints.String():          true,
+	OIDExtensionPolicyMappings.String():             true,
+	OIDExtensionFreshestCRL.String():                false,
+	OIDExtensionAuthorityInfoAccess.String():        false,
+	OIDExtensionSubjectInfoAccess.String():          false,
+	OIDExtensionCTPoison.String():                   true,
+	OIDExtensionCTSCT.String():                      false,
+}
 
 var (
 	OIDAuthorityInfoAccessOCSP    = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 1}
