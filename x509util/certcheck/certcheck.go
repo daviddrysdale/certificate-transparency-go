@@ -31,7 +31,8 @@ var intermediate = flag.String("intermediate", "", "Intermediate CA certificate 
 var verbose = flag.Bool("verbose", false, "Verbose output")
 var validate = flag.Bool("validate", false, "Validate certificate signatures")
 var timecheck = flag.Bool("timecheck", false, "Check current validity of certificate")
-var revokecheck = flag.Bool("check_revocation", false, "Check revocation status of certificate")
+var revokecheck = flag.Bool("check_revocation", false, "Check (online) revocation status of certificate")
+var ignore = flag.String("ignore", "", "Comma-separated list of error IDs to ignore")
 
 func addCerts(filename string, pool *x509.CertPool) {
 	if filename != "" {
@@ -51,6 +52,7 @@ func addCerts(filename string, pool *x509.CertPool) {
 
 func main() {
 	flag.Parse()
+	ignoredIDs := x509.ErrorFilter(*ignore)
 
 	opts := x509.VerifyOptions{
 		KeyUsages:         []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
@@ -70,9 +72,14 @@ func main() {
 			continue
 		}
 		for _, data := range dataList {
-			certs, err := x509.ParseCertificates(data)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s: %v\n", filename, err.Error())
+			certs, errs := x509.ParseCertificatesLax(data)
+			errs = errs.Filter(ignoredIDs)
+			for _, err := range errs.Errs {
+				if *verbose {
+					fmt.Fprintf(os.Stderr, "%s: %v\n", filename, err.VerboseError())
+				} else {
+					fmt.Fprintf(os.Stderr, "%s: %v\n", filename, err.Error())
+				}
 				errcount++
 			}
 			for _, cert := range certs {
