@@ -770,6 +770,7 @@ type Certificate struct {
 
 	// CRL Distribution Points
 	CRLDistributionPoints []string
+	FreshestCRL           []string
 
 	PolicyIdentifiers []asn1.ObjectIdentifier
 
@@ -1657,6 +1658,32 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 				// RFC 5280 4.2.1.7: Issuer Alternative Name
 				parseAltNamesExtension(e.Value, "issuer", &out.IssuerAltNames, errs)
 
+			case OIDExtensionFreshestCRL[3]:
+				// RFC 5280 4.2.1.15: Freshest CRL
+				var cdp []distributionPoint
+				if rest, err := asn1.Unmarshal(e.Value, &cdp); err != nil {
+					errs.AddID(errAsn1InvalidFreshestCRL, err.Error())
+				} else if len(rest) != 0 {
+					errs.AddID(errAsn1TrailingFreshestCRL)
+				}
+
+				for _, dp := range cdp {
+					// Per RFC 5280, 4.2.1.13, one of distributionPoint or cRLIssuer may be empty.
+					if len(dp.DistributionPoint.FullName.Bytes) == 0 {
+						continue
+					}
+
+					var n asn1.RawValue
+					if _, err := asn1.Unmarshal(dp.DistributionPoint.FullName.Bytes, &n); err != nil {
+						errs.AddID(errAsn1InvalidCRLDistributionPointName, err.Error())
+					}
+					// Trailing data after the fullName is allowed because other elements of the SEQUENCE can appear.
+
+					if n.Tag == 6 {
+						out.FreshestCRL = append(out.FreshestCRL, string(n.Bytes))
+					}
+				}
+
 			default:
 				// Unknown extensions are recorded if critical.
 				unhandled = true
@@ -2013,7 +2040,7 @@ func marshalSANs(gnames GeneralNames) (derBytes []byte, err error) {
 }
 
 func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 13 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 14 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -2240,6 +2267,28 @@ func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.E
 		n++
 	}
 
+	if len(template.FreshestCRL) > 0 && !oidInExtensions(OIDExtensionFreshestCRL, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionFreshestCRL
+
+		var crlDp []distributionPoint
+		for _, name := range template.FreshestCRL {
+			rawFullName, _ := asn1.Marshal(asn1.RawValue{Tag: 6, Class: asn1.ClassContextSpecific, Bytes: []byte(name)})
+
+			dp := distributionPoint{
+				DistributionPoint: distributionPointName{
+					FullName: asn1.RawValue{Tag: 0, Class: asn1.ClassContextSpecific, IsCompound: true, Bytes: rawFullName},
+				},
+			}
+			crlDp = append(crlDp, dp)
+		}
+
+		ret[n].Value, err = asn1.Marshal(crlDp)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
 	if (len(template.RawSCT) > 0 || len(template.SCTList.SCTList) > 0) && !oidInExtensions(OIDExtensionCTSCT, template.ExtraExtensions) {
 		rawSCT := template.RawSCT
 		if len(template.SCTList.SCTList) > 0 {
@@ -2360,6 +2409,7 @@ func signingParamsForPublicKey(pub interface{}, requestedSigAlgo SignatureAlgori
 //    - Permitted (and/or PermittedDNSDomainsCritical, PermittedDNSDomains)
 //    - Excluded (and/or ExcludedDNSDomains)
 //    - CRLDistributionPoints
+//    - FreshestCRL
 //    - RawSCT, SCTList
 //
 // The certificate is signed by parent. If parent is equal to template then the
