@@ -1622,6 +1622,11 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 					errs.AddID(errAsn1TrailingSCTContents, err.Error())
 				}
 			}
+		} else if e.Id.Equal(OIDExtensionCTPoison) {
+			// The CT poison extension is officially unhandled; pre-certificates that include it
+			// are explicitly not supposed to parse correctly as an X.509 certificate.
+			unhandled = true
+			errs.AddID(ErrCTPoisonExtensionPresent)
 		} else {
 			// Unknown extensions are recorded if critical.
 			unhandled = true
@@ -1730,6 +1735,19 @@ func ParseTBSCertificateLax(asn1Data []byte) (*Certificate, Errors) {
 // ParseCertificate parses a single certificate from the given ASN.1 DER data.
 func ParseCertificate(asn1Data []byte) (*Certificate, error) {
 	cert, errs := ParseCertificateLax(asn1Data)
+	err := errs.FirstFatal()
+	if err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// ParsePreCertificate parses an RFC6962 pre-certificate that is embedded in an
+// X.509 Certificate in ASN.1 DER format; it ignores the presence of the critical
+// CT poison extension (which would otherwise trigger a parsing error).
+func ParsePreCertificate(asn1Data []byte) (*Certificate, error) {
+	cert, errs := ParseCertificateLax(asn1Data)
+	errs = errs.Filter([]ErrorID{ErrCTPoisonExtensionPresent})
 	err := errs.FirstFatal()
 	if err != nil {
 		return nil, err

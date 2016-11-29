@@ -120,6 +120,9 @@ const (
 	errAsn1InvalidSubjectDirAttrs
 	errAsn1TrailingSubjectDirAttrs
 	errSubjectDirAttrsEmpty
+	// ErrCTPoisonExtensionPresent should only occur for Certificate
+	// Transparency pre-certificates (which can be parsed with the
+	// ParsePreCertificate entrypoint).
 	ErrCTPoisonExtensionPresent
 	errAsn1InvalidSCT
 	errAsn1TrailingSCT
@@ -1066,6 +1069,7 @@ var errorInfo = []Error{
 		SpecRef:  "RFC 6962 s3.1",
 		SpecText: "Precertificate is constructed ... by adding a special critical poison extension ... to ensure that the Precertificate cannot be validated by a standard X.509v3 client",
 		Category: MalformedCertificate,
+		Fatal:    true,
 	},
 	{
 		ID:       errAsn1InvalidSCT,
