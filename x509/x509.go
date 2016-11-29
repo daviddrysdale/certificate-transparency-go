@@ -785,6 +785,16 @@ type Certificate struct {
 	FreshestCRL           []string
 
 	PolicyIdentifiers []asn1.ObjectIdentifier
+	PolicyMappings    []PolicyMapping
+
+	RequireExplicitPolicy     bool
+	RequireExplicitPolicySkip int
+
+	InhibitPolicyMapping     bool
+	InhibitPolicyMappingSkip int
+
+	InhibitAnyPolicy     bool
+	InhibitAnyPolicySkip int
 
 	SubjectDirectoryAttributes []DirectoryAttribute
 
@@ -1118,10 +1128,23 @@ type policyQualifierInfo struct {
 	Qualifier asn1.RawValue
 }
 
+// PolicyMapping describes a mapping from issuer to subject certificate policies.
+// RFC 5280, 4.2.1.5
+type PolicyMapping struct {
+	IssuerPolicy  asn1.ObjectIdentifier
+	SubjectPolicy asn1.ObjectIdentifier
+}
+
 // RFC 5280, 4.2.1.10
 type nameConstraints struct {
 	Permitted []generalSubtree `asn1:"optional,tag:0"`
 	Excluded  []generalSubtree `asn1:"optional,tag:1"`
+}
+
+// RFC 5280, 4.2.1.11
+type policyConstraints struct {
+	RequireExplicitPolicy int `asn1:"optional,tag:0,default:-1"`
+	InhibitPolicyMapping  int `asn1:"optional,tag:1,default:-1"`
 }
 
 type generalSubtree struct {
@@ -1727,6 +1750,53 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 					errs.AddID(errSubjectDirAttrsEmpty)
 				}
 
+			case OIDExtensionInhibitAnyPolicy[3]:
+				// RFC 5280 4.2.1.14: Inhibit Any Policy
+				out.InhibitAnyPolicy = true
+				if rest, err := asn1.Unmarshal(e.Value, &out.InhibitAnyPolicySkip); err != nil {
+					errs.AddID(errAsn1InvalidInhibitAnyPolicy, err.Error())
+				} else if len(rest) != 0 {
+					errs.AddID(errAsn1TrailingInhibitAnyPolicy)
+				}
+				if out.InhibitAnyPolicySkip < 0 {
+					errs.AddID(errInhibitAnyPolicyNegSkip, out.InhibitAnyPolicy)
+				}
+
+			case OIDExtensionPolicyConstraints[3]:
+				// RFC 5280 4.2.1.11: Policy Constraints
+				var constraints policyConstraints
+				if rest, err := asn1.Unmarshal(e.Value, &constraints); err != nil {
+					errs.AddID(errAsn1InvalidPolicyConstraints, err.Error())
+				} else if len(rest) != 0 {
+					errs.AddID(errAsn1TrailingPolicyConstraints)
+				}
+				out.RequireExplicitPolicy = (constraints.RequireExplicitPolicy != -1)
+				out.RequireExplicitPolicySkip = constraints.RequireExplicitPolicy
+				out.InhibitPolicyMapping = (constraints.InhibitPolicyMapping != -1)
+				out.InhibitPolicyMappingSkip = constraints.InhibitPolicyMapping
+				if !out.RequireExplicitPolicy && !out.InhibitPolicyMapping {
+					errs.AddID(errPolicyConstraintsEmpty)
+				}
+
+			case OIDExtensionPolicyMappings[3]:
+				// RFC 5280 4.2.1.5: Policy Mappings
+				if rest, err := asn1.Unmarshal(e.Value, &out.PolicyMappings); err != nil {
+					errs.AddID(errAsn1InvalidPolicyMappings, err.Error())
+				} else if len(rest) != 0 {
+					errs.AddID(errAsn1TrailingPolicyMappings)
+				}
+				if len(out.PolicyMappings) == 0 {
+					errs.AddID(errPolicyMappingsEmpty)
+				}
+				for _, mapping := range out.PolicyMappings {
+					if mapping.IssuerPolicy.Equal(oidAnyPolicy) {
+						errs.AddID(errPolicyMappingsAnyPolicy, "from")
+					}
+					if mapping.SubjectPolicy.Equal(oidAnyPolicy) {
+						errs.AddID(errPolicyMappingsAnyPolicy, "to")
+					}
+				}
+
 			case OIDExtensionFreshestCRL[3]:
 				// RFC 5280 4.2.1.15: Freshest CRL
 				var cdp []distributionPoint
@@ -2110,7 +2180,7 @@ func marshalSANs(gnames GeneralNames) (derBytes []byte, err error) {
 }
 
 func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 15 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 18 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -2324,6 +2394,46 @@ func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.E
 		}
 	}
 
+	if template.InhibitAnyPolicy && !oidInExtensions(OIDExtensionInhibitAnyPolicy, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionInhibitAnyPolicy
+		ret[n].Critical = true
+		ret[n].Value, err = asn1.Marshal(template.InhibitAnyPolicySkip)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
+	if (template.RequireExplicitPolicy || template.InhibitPolicyMapping) &&
+		!oidInExtensions(OIDExtensionPolicyConstraints, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionPolicyConstraints
+		ret[n].Critical = true
+		// The default -1 values imply skipping the OPTIONAL field.
+		constraints := policyConstraints{RequireExplicitPolicy: -1, InhibitPolicyMapping: -1}
+		if template.RequireExplicitPolicy {
+			constraints.RequireExplicitPolicy = template.RequireExplicitPolicySkip
+		}
+		if template.InhibitPolicyMapping {
+			constraints.InhibitPolicyMapping = template.InhibitPolicyMappingSkip
+		}
+		ret[n].Value, err = asn1.Marshal(constraints)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
+	if len(template.PolicyMappings) > 0 &&
+		!oidInExtensions(OIDExtensionPolicyMappings, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionPolicyMappings
+		ret[n].Critical = true
+		ret[n].Value, err = asn1.Marshal(template.PolicyMappings)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
 	if len(template.CRLDistributionPoints) > 0 &&
 		!oidInExtensions(OIDExtensionCRLDistributionPoints, template.ExtraExtensions) {
 		ret[n].Id = OIDExtensionCRLDistributionPoints
@@ -2489,6 +2599,9 @@ func signingParamsForPublicKey(pub interface{}, requestedSigAlgo SignatureAlgori
 //    - PolicyIdentifiers
 //    - Permitted (and/or PermittedDNSDomainsCritical, PermittedDNSDomains)
 //    - Excluded (and/or ExcludedDNSDomains)
+//    - RequireExplicitPolicy, RequireExplicitPolicySkip, InhibitPolicyMapping, InhibitPolicyMappingSkip
+//    - InhibitAnyPolicy, InhibitAnyPolicySkip
+//    - PolicyMappings
 //    - CRLDistributionPoints
 //    - FreshestCRL
 //    - RawSCT, SCTList
