@@ -2128,7 +2128,7 @@ func generateCert(cn string, isCA bool, issuer *Certificate, issuerKey crypto.Pr
 		KeyUsage:              KeyUsageKeyEncipherment | KeyUsageDigitalSignature | KeyUsageCertSign,
 		ExtKeyUsage:           []ExtKeyUsage{ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IsCA: isCA,
+		IsCA:                  isCA,
 	}
 	if issuer == nil {
 		issuer = template
@@ -2140,7 +2140,7 @@ func generateCert(cn string, isCA bool, issuer *Certificate, issuerKey crypto.Pr
 		return nil, nil, err
 	}
 	cert, err := ParseCertificate(derBytes)
-	if err != nil {
+	if IsFatal(err) {
 		return nil, nil, err
 	}
 
@@ -2157,7 +2157,7 @@ func TestPathologicalChain(t *testing.T) {
 	roots, intermediates := NewCertPool(), NewCertPool()
 
 	parent, parentKey, err := generateCert("Root CA", true, nil, nil)
-	if err != nil {
+	if IsFatal(err) {
 		t.Fatal(err)
 	}
 	roots.AddCert(parent)
@@ -2195,7 +2195,7 @@ func TestLongChain(t *testing.T) {
 	roots, intermediates := NewCertPool(), NewCertPool()
 
 	parent, parentKey, err := generateCert("Root CA", true, nil, nil)
-	if err != nil {
+	if IsFatal(err) {
 		t.Fatal(err)
 	}
 	roots.AddCert(parent)

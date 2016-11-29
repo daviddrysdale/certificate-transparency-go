@@ -46,6 +46,7 @@
 //     - Key usage details
 //     - CertificatePolicies details
 //     - SerialNumber > 0
+//     - inter-extension consistency
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Support unique IDs
@@ -1915,6 +1916,12 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				out.MaxPathLen = constraints.MaxPathLen
 				out.MaxPathLenZero = out.MaxPathLen == 0
 				// TODO: map out.MaxPathLen to 0 if it has the -1 default value? (Issue 19285)
+				if out.MaxPathLen < -1 {
+					// Note that we cannot detect an explicit -1 value because
+					// that value has been used as the default value for this integer
+					// field.
+					nfe.AddError(fmt.Errorf("x509: BasicConstraints extension with negative path len (%d)", out.MaxPathLen))
+				}
 
 			case OIDExtensionSubjectAltName[3]:
 				// RFC 5280, 4.2.1.6
@@ -2220,6 +2227,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 			out.UnhandledCriticalExtensions = append(out.UnhandledCriticalExtensions, e.Id)
 		}
 	}
+	checkCertificate(out, &nfe)
 	if nfe.HasError() {
 		return out, nfe
 	}
@@ -2275,6 +2283,85 @@ func checkValidDate(which string, t time.Time, val asn1.RawValue, nfe *NonFatalE
 	}
 	if strings.ContainsRune(tstr, '.') {
 		nfe.AddError(fmt.Errorf("x509: date for validity.%s includes fractional seconds", which))
+	}
+}
+
+// checkCertificate checks the parsed Certificate for validity, potentially adding
+// new errors to nfe.  This function particularly checks for errors resulting from
+// interactions between different parts of the certificate (e.g. between extensions)
+// rather than errors that are local to a single part; the latter are generally
+// detected during parsing.
+func checkCertificate(cert *Certificate, nfe *NonFatalErrors) {
+	// Version checks
+	if len(cert.Extensions) > 0 && cert.Version < 3 {
+		nfe.AddError(fmt.Errorf("x509: extensions present in non-V3 (v%d) certificate", cert.Version))
+	}
+	if cert.SubjectUniqueId.BitLength > 0 || cert.IssuerUniqueId.BitLength > 0 {
+		if cert.Version < 2 {
+			nfe.AddError(errors.New("x509: SubjectUniqueIdentifier / IssuerUniqueIdentifier present in V1 cert"))
+		}
+		if len(cert.Extensions) == 0 && cert.Version != 2 {
+			nfe.AddError(fmt.Errorf("x509: non-V2 (V%d) certificate with UniqueIdentifier but no extensions", cert.Version))
+		}
+	}
+
+	// KeyUsage checks: certsign bit iff IsCA
+	if oidInExtensions(OIDExtensionKeyUsage, cert.Extensions) {
+		if cert.IsCA {
+			if (cert.KeyUsage & KeyUsageCertSign) == 0 {
+				nfe.AddError(errors.New("x509: CA certificate missing keyCertSign bit in KeyUsage"))
+			}
+		} else {
+			if cert.KeyUsage&KeyUsageCertSign == KeyUsageCertSign {
+				nfe.AddError(errors.New("x509: non-CA certificate with keyCertSign bit in KeyUsage"))
+			}
+		}
+	}
+
+	// NameConstraints checks
+	if oidInExtensions(OIDExtensionNameConstraints, cert.Extensions) {
+		if !cert.IsCA {
+			nfe.AddError(errors.New("x509: NameConstraints extension in non-CA certificate"))
+		}
+	}
+
+	// PolicyMappings checks: issuer policies should appear in certificate policies
+	if oidInExtensions(OIDExtensionPolicyMappings, cert.Extensions) {
+		if !oidInExtensions(OIDExtensionCertificatePolicies, cert.Extensions) {
+			for _, mapOID := range cert.PolicyMappings {
+				nfe.AddError(fmt.Errorf("x509: PolicyMapping extension referencing unspecified policy %v", mapOID.IssuerPolicy))
+			}
+		} else {
+		maploop:
+			for _, mapOID := range cert.PolicyMappings {
+				for _, oid := range cert.PolicyIdentifiers {
+					if mapOID.IssuerPolicy.Equal(oid) {
+						break maploop
+					}
+				}
+				nfe.AddError(fmt.Errorf("x509: PolicyMapping extension referencing unspecified policy %v", mapOID.IssuerPolicy))
+			}
+		}
+	}
+
+	// SubjectKeyIdentifier checks
+	if !oidInExtensions(OIDExtensionSubjectKeyId, cert.Extensions) {
+		if cert.IsCA {
+			nfe.AddError(errors.New("x509: SubjectKeyIdentifier missing in CA certificate"))
+		}
+	}
+
+	// BasicConstraints checks
+	for _, ext := range cert.Extensions {
+		if ext.Id.Equal(OIDExtensionBasicConstraints) {
+			if cert.IsCA && (cert.KeyUsage&KeyUsageCertSign == KeyUsageCertSign) && !ext.Critical {
+				nfe.AddError(errors.New("x509: BasicConstraints extension non-critical in CA certificate"))
+			}
+			if !cert.IsCA && cert.MaxPathLen != -1 {
+				nfe.AddError(errors.New("x509: pathLenConstraint set in non-CA certificate"))
+			}
+			break
+		}
 	}
 }
 

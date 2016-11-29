@@ -1949,7 +1949,7 @@ func serialiseAndParse(t *testing.T, template *Certificate) *Certificate {
 	}
 
 	cert, err := ParseCertificate(derBytes)
-	if err != nil {
+	if IsFatal(err) {
 		t.Fatalf("failed to parse certificate: %s", err)
 		return nil
 	}
@@ -2469,7 +2469,7 @@ ANYzpmuV+oIedAsPpIbfIzN8njYUs1zio+1IoI4o8ddM9sCbtPU8o+WoY6IsCKXV
 func TestCriticalNameConstraintWithUnknownType(t *testing.T) {
 	block, _ := pem.Decode([]byte(criticalNameConstraintWithUnknownTypePEM))
 	cert, err := ParseCertificate(block.Bytes)
-	if err != nil {
+	if IsFatal(err) {
 		t.Fatalf("unexpected parsing failure: %s", err)
 	}
 
@@ -2678,6 +2678,17 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "SubjectDirAttrEmpty", in: "testdata/invalid/xf-ext-subject-dirattr-empty.pem", wantErr: "empty X.509 subject directory attributes"},
 		{desc: "NegativeSerialNumber", in: "testdata/invalid/xf-serial-negative.pem", wantErr: "negative serial number"},
 		{desc: "ZeroSerialNumber", in: "testdata/invalid/xf-serial-zero.pem", wantErr: "zero serial number"},
+		{desc: "NegativePathLen", in: "testdata/invalid/xf-ext-constraints-neg-pathlen.pem", wantErr: "BasicConstraints extension with negative path len"},
+		{desc: "NonCAPathLenConstraint", in: "testdata/invalid/xf-ext-constraints-path-nonca.pem", wantErr: "pathLenConstraint set in non-CA certificate"},
+		{desc: "NonCAKeySign", in: "testdata/invalid/xf-ext-keysign-nonca.pem", wantErr: "non-CA certificate with keyCertSign"},
+		{desc: "NonCANameConstraints", in: "testdata/invalid/xf-ext-name-constraints-nonca.pem", wantErr: "NameConstraints extension in non-CA certificate"},
+		{desc: "PolicyMapUnref", in: "testdata/invalid/xf-ext-policy-map-unref.pem", wantErr: "referencing unspecified policy"},
+		{desc: "CANoSubjectKeyID", in: "testdata/invalid/xf-ext-subject-keyid-ca-absent.pem", wantErr: "SubjectKeyIdentifier missing in CA certificate"},
+		{desc: "V1CertWithExtensions", in: "testdata/invalid/xf-v1-extensions.pem", wantErr: "extensions present in non-V3"},
+		{desc: "V1CertWithUniqueID", in: "testdata/invalid/xf-v1-uniqueid.pem", wantErr: "UniqueIdentifier present in V1"},
+		{desc: "V2CertWithExtensions", in: "testdata/invalid/xf-v2-extensions.pem", wantErr: "extensions present in non-V3"},
+		{desc: "V3CertWithNoExts1", in: "testdata/invalid/xf-v3-uniqueid-noexts1.pem", wantErr: "non-V2 (V3) certificate"},
+		{desc: "V3CertWithNoExts2", in: "testdata/invalid/xf-v3-uniqueid-noexts2.pem", wantErr: "non-V2 (V3) certificate"},
 	}
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
