@@ -44,6 +44,7 @@
 //     - Duplicate extensions
 //     - Extension critical status
 //     - Key usage details
+//     - CertificatePolicies details
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Support unique IDs
@@ -650,6 +651,11 @@ func OIDFromNamedCurve(curve elliptic.Curve) (asn1.ObjectIdentifier, bool) {
 
 	return nil, false
 }
+
+var (
+	oidPolicyQualifierCpsUri     = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 2, 1}
+	oidPolicyQualifierUserNotice = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 2, 2}
+)
 
 // KeyUsage represents the set of actions that are valid for a given key. It's
 // a bitmap of the KeyUsage* constants.
@@ -1298,8 +1304,13 @@ type basicConstraints struct {
 
 // RFC 5280, 4.2.1.4
 type policyInformation struct {
-	Policy asn1.ObjectIdentifier
-	// policyQualifiers omitted
+	Policy     asn1.ObjectIdentifier
+	Qualifiers []policyQualifierInfo `asn1:"optional"`
+}
+
+type policyQualifierInfo struct {
+	ID        asn1.ObjectIdentifier
+	Qualifier asn1.RawValue
 }
 
 const (
@@ -2035,8 +2046,23 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				}
 				out.PolicyIdentifiers = make([]asn1.ObjectIdentifier, len(policies))
 				for i, policy := range policies {
+					for _, existing := range out.PolicyIdentifiers {
+						if existing.Equal(policy.Policy) {
+							nfe.AddError(fmt.Errorf("x509: duplicate policy %v in CertificatePolicies extension", policy.Policy))
+						}
+					}
 					out.PolicyIdentifiers[i] = policy.Policy
+					for _, qualifier := range policy.Qualifiers {
+						if !qualifier.ID.Equal(oidPolicyQualifierCpsUri) && !qualifier.ID.Equal(oidPolicyQualifierUserNotice) {
+							if policy.Policy.Equal(OIDAnyPolicy) {
+								nfe.AddError(fmt.Errorf("x509: CertificatePolicies extension including unknown policy qualifier %v for anyPolicy", qualifier.ID))
+							} else {
+								nfe.AddError(fmt.Errorf("x509: CertificatePolicies extension including unknown policy qualifier %v", qualifier.ID))
+							}
+						}
+					}
 				}
+				// TODO(drysdale): expose policy qualifier information?
 
 			case OIDExtensionInhibitAnyPolicy[3]:
 				// RFC 5280 4.2.1.14: Inhibit Any Policy
