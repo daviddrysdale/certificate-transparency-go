@@ -548,6 +548,11 @@ func OIDFromNamedCurve(curve elliptic.Curve) (asn1.ObjectIdentifier, bool) {
 	return nil, false
 }
 
+var (
+	oidPolicyQualifierCpsUri     = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 2, 1}
+	oidPolicyQualifierUserNotice = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 2, 2}
+)
+
 // KeyUsage represents the set of actions that are valid for a given key. It's
 // a bitmap of the KeyUsage* constants.
 type KeyUsage int
@@ -1095,8 +1100,13 @@ type basicConstraints struct {
 
 // RFC 5280, 4.2.1.4
 type policyInformation struct {
-	Policy asn1.ObjectIdentifier
-	// policyQualifiers omitted
+	Policy     asn1.ObjectIdentifier
+	Qualifiers []policyQualifierInfo `asn1:"optional"`
+}
+
+type policyQualifierInfo struct {
+	ID        asn1.ObjectIdentifier
+	Qualifier asn1.RawValue
 }
 
 // RFC 5280, 4.2.1.10
@@ -1651,8 +1661,23 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 				}
 				out.PolicyIdentifiers = make([]asn1.ObjectIdentifier, len(policies))
 				for i, policy := range policies {
+					for _, existing := range out.PolicyIdentifiers {
+						if existing.Equal(policy.Policy) {
+							errs.AddID(errCertificatePoliciesDuplicate, policy.Policy)
+						}
+					}
 					out.PolicyIdentifiers[i] = policy.Policy
+					for _, qualifier := range policy.Qualifiers {
+						if !qualifier.ID.Equal(oidPolicyQualifierCpsUri) && !qualifier.ID.Equal(oidPolicyQualifierUserNotice) {
+							if policy.Policy.Equal(OIDAnyPolicy) {
+								errs.AddID(errCertificatePoliciesQualifierUnknownAny, qualifier.ID)
+							} else {
+								errs.AddID(errCertificatePoliciesQualifierUnknown, qualifier.ID)
+							}
+						}
+					}
 				}
+				// TODO(drysdale): expose policy qualifier information?
 
 			case OIDExtensionIssuerAltName[3]:
 				// RFC 5280 4.2.1.7: Issuer Alternative Name
@@ -2005,6 +2030,7 @@ var (
 	OIDAuthorityInfoAccessIssuers = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 2}
 	OIDSubjectInfoAccessTimestamp = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 3}
 	OIDSubjectInfoAccessCARepo    = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 5}
+	OIDAnyPolicy                  = asn1.ObjectIdentifier{2, 5, 29, 32, 0}
 )
 
 // oidInExtensions returns whether an extension with the given oid exists in
