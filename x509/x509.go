@@ -38,6 +38,7 @@
 //  - RSAES-OAEP support:
 //     - Support for parsing RSASES-OAEP public keys from certificates
 //  - General improvements:
+//     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Export and use OID values throughout.
 //     - Export OIDFromNamedCurve().
 //     - Export SignatureAlgorithmFromAI().
@@ -862,6 +863,16 @@ type Certificate struct {
 	CRLDistributionPoints []string
 
 	PolicyIdentifiers []asn1.ObjectIdentifier
+	PolicyMappings    []PolicyMapping
+
+	RequireExplicitPolicy     bool
+	RequireExplicitPolicySkip int
+
+	InhibitPolicyMapping     bool
+	InhibitPolicyMappingSkip int
+
+	InhibitAnyPolicy     bool
+	InhibitAnyPolicySkip int
 
 	RPKIAddressRanges                   []*IPAddressFamilyBlocks
 	RPKIASNumbers, RPKIRoutingDomainIDs *ASIdentifiers
@@ -1272,6 +1283,19 @@ const (
 	nameTypeURI   = 6
 	nameTypeIP    = 7
 )
+
+// PolicyMapping describes a mapping from issuer to subject certificate policies.
+// RFC 5280, 4.2.1.5
+type PolicyMapping struct {
+	IssuerPolicy  asn1.ObjectIdentifier
+	SubjectPolicy asn1.ObjectIdentifier
+}
+
+// RFC 5280, 4.2.1.11
+type policyConstraints struct {
+	RequireExplicitPolicy int `asn1:"optional,tag:0,default:-1"`
+	InhibitPolicyMapping  int `asn1:"optional,tag:1,default:-1"`
+}
 
 // RFC 5280, 4.2.2.1
 type accessDescription struct {
@@ -1952,6 +1976,53 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					out.PolicyIdentifiers[i] = policy.Policy
 				}
 
+			case OIDExtensionInhibitAnyPolicy[3]:
+				// RFC 5280 4.2.1.14: Inhibit Any Policy
+				out.InhibitAnyPolicy = true
+				if rest, err := asn1.Unmarshal(e.Value, &out.InhibitAnyPolicySkip); err != nil {
+					return nil, err
+				} else if len(rest) != 0 {
+					return nil, errors.New("x509: trailing data after X.509 inhibit any policy")
+				}
+				if out.InhibitAnyPolicySkip < 0 {
+					return nil, errors.New("x509: negative skip count in X.509 inhibit any policy")
+				}
+
+			case OIDExtensionPolicyConstraints[3]:
+				// RFC 5280 4.2.1.11: Policy Constraints
+				var constraints policyConstraints
+				if rest, err := asn1.Unmarshal(e.Value, &constraints); err != nil {
+					return nil, err
+				} else if len(rest) != 0 {
+					return nil, errors.New("x509: trailing data after X.509 policy constraints")
+				}
+				out.RequireExplicitPolicy = (constraints.RequireExplicitPolicy != -1)
+				out.RequireExplicitPolicySkip = constraints.RequireExplicitPolicy
+				out.InhibitPolicyMapping = (constraints.InhibitPolicyMapping != -1)
+				out.InhibitPolicyMappingSkip = constraints.InhibitPolicyMapping
+				if !out.RequireExplicitPolicy && !out.InhibitPolicyMapping {
+					return nil, errors.New("x509: no contents in X.509 policy constraints")
+				}
+
+			case OIDExtensionPolicyMappings[3]:
+				// RFC 5280 4.2.1.5: Policy Mappings
+				if rest, err := asn1.Unmarshal(e.Value, &out.PolicyMappings); err != nil {
+					return nil, err
+				} else if len(rest) != 0 {
+					return nil, errors.New("x509: trailing data after X.509 policy mappings")
+				}
+				if len(out.PolicyMappings) == 0 {
+					return nil, errors.New("x509: no contents in X.509 policy mappings")
+				}
+				for _, mapping := range out.PolicyMappings {
+					if mapping.IssuerPolicy.Equal(OIDAnyPolicy) {
+						return nil, errors.New("x509: mapping from anyPolicy in X.509 policy mappings")
+					}
+					if mapping.SubjectPolicy.Equal(OIDAnyPolicy) {
+						return nil, errors.New("x509: mapping to anyPolicy in X.509 policy mappings")
+					}
+				}
+
 			default:
 				// Unknown extensions are recorded if critical.
 				unhandled = true
@@ -2196,7 +2267,7 @@ func isIA5String(s string) error {
 }
 
 func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 12 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 15 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -2444,6 +2515,46 @@ func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId 
 		n++
 	}
 
+	if template.InhibitAnyPolicy && !oidInExtensions(OIDExtensionInhibitAnyPolicy, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionInhibitAnyPolicy
+		ret[n].Critical = true
+		ret[n].Value, err = asn1.Marshal(template.InhibitAnyPolicySkip)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
+	if (template.RequireExplicitPolicy || template.InhibitPolicyMapping) &&
+		!oidInExtensions(OIDExtensionPolicyConstraints, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionPolicyConstraints
+		ret[n].Critical = true
+		// The default -1 values imply skipping the OPTIONAL field.
+		constraints := policyConstraints{RequireExplicitPolicy: -1, InhibitPolicyMapping: -1}
+		if template.RequireExplicitPolicy {
+			constraints.RequireExplicitPolicy = template.RequireExplicitPolicySkip
+		}
+		if template.InhibitPolicyMapping {
+			constraints.InhibitPolicyMapping = template.InhibitPolicyMappingSkip
+		}
+		ret[n].Value, err = asn1.Marshal(constraints)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
+	if len(template.PolicyMappings) > 0 &&
+		!oidInExtensions(OIDExtensionPolicyMappings, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionPolicyMappings
+		ret[n].Critical = true
+		ret[n].Value, err = asn1.Marshal(template.PolicyMappings)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
 	if len(template.CRLDistributionPoints) > 0 &&
 		!oidInExtensions(OIDExtensionCRLDistributionPoints, template.ExtraExtensions) {
 		ret[n].Id = OIDExtensionCRLDistributionPoints
@@ -2590,6 +2701,9 @@ var emptyASN1Subject = []byte{0x30, 0}
 //    - ExcludedDNSDomains, ExcludedIPRanges, ExcludedEmailAddresses, ExcludedURIDomains, PermittedDNSDomainsCritical,
 //      PermittedDNSDomains, PermittedIPRanges, PermittedEmailAddresses, PermittedURIDomains
 //    - CRLDistributionPoints
+//    - RequireExplicitPolicy, RequireExplicitPolicySkip, InhibitPolicyMapping, InhibitPolicyMappingSkip
+//    - InhibitAnyPolicy, InhibitAnyPolicySkip
+//    - PolicyMappings
 //    - RawSCT, SCTList
 //    - ExtraExtensions
 //
@@ -3116,7 +3230,7 @@ func ParseCertificateRequest(asn1Data []byte) (*CertificateRequest, error) {
 
 func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error) {
 	out := &CertificateRequest{
-		Raw:                      in.Raw,
+		Raw: in.Raw,
 		RawTBSCertificateRequest: in.TBSCSR.Raw,
 		RawSubjectPublicKeyInfo:  in.TBSCSR.PublicKey.Raw,
 		RawSubject:               in.TBSCSR.Subject.FullBytes,
