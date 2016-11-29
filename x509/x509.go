@@ -45,6 +45,7 @@
 //     - Extension critical status
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
+//     - Support unique IDs
 //     - Export and use OID values throughout.
 //     - Export OIDFromNamedCurve().
 //     - Export SignatureAlgorithmFromAI().
@@ -786,6 +787,8 @@ type Certificate struct {
 	Issuer              pkix.Name
 	Subject             pkix.Name
 	NotBefore, NotAfter time.Time // Validity bounds.
+	IssuerUniqueId      asn1.BitString
+	SubjectUniqueId     asn1.BitString
 	KeyUsage            KeyUsage
 
 	// Extensions contains raw X.509 extensions. When parsing certificates,
@@ -1834,6 +1837,8 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 
 	out.Version = in.TBSCertificate.Version + 1
 	out.SerialNumber = in.TBSCertificate.SerialNumber
+	out.IssuerUniqueId = in.TBSCertificate.UniqueId
+	out.SubjectUniqueId = in.TBSCertificate.SubjectUniqueId
 
 	var issuer, subject pkix.RDNSequence
 	if rest, err := asn1.Unmarshal(in.TBSCertificate.Subject.FullBytes, &subject); err != nil {
