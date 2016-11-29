@@ -1559,6 +1559,12 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 				out.MaxPathLen = constraints.MaxPathLen
 				out.MaxPathLenZero = out.MaxPathLen == 0
 				// TODO: map out.MaxPathLen to 0 if it has the -1 default value? (Issue 19285)
+				if out.MaxPathLen < -1 {
+					// Note that we cannot detect an explicit -1 value because
+					// that value has been used as the default value for this integer
+					// field.
+					errs.AddID(errBasicConstraintsNegativePathLen, out.MaxPathLen)
+				}
 
 			case OIDExtensionSubjectAltName[3]:
 				parseAltNamesExtension(e.Value, "subject", &out.AltNames, errs)
@@ -1789,10 +1795,10 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 					errs.AddID(errPolicyMappingsEmpty)
 				}
 				for _, mapping := range out.PolicyMappings {
-					if mapping.IssuerPolicy.Equal(oidAnyPolicy) {
+					if mapping.IssuerPolicy.Equal(OIDAnyPolicy) {
 						errs.AddID(errPolicyMappingsAnyPolicy, "from")
 					}
-					if mapping.SubjectPolicy.Equal(oidAnyPolicy) {
+					if mapping.SubjectPolicy.Equal(OIDAnyPolicy) {
 						errs.AddID(errPolicyMappingsAnyPolicy, "to")
 					}
 				}
@@ -1902,6 +1908,8 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 		}
 	}
 
+	checkCertificate(out, errs)
+
 	return out
 }
 
@@ -1957,6 +1965,82 @@ func checkValidDate(which string, t time.Time, val asn1.RawValue, errs *Errors) 
 	}
 	if strings.ContainsRune(tstr, '.') {
 		errs.AddID(errDateFraction, which)
+	}
+}
+
+// checkCertificate checks the parsed Certificate for validity, potentially adding
+// new errors to errs.  This function particularly checks for errors resulting from
+// interactions between different parts of the certificate (e.g. between extensions)
+// rather than errors that are local to a single part; the latter are generally
+// detected during parsing.
+func checkCertificate(cert *Certificate, errs *Errors) {
+	// Version checks
+	if len(cert.Extensions) > 0 && cert.Version < 3 {
+		errs.AddID(errExtensionsInOldCert, cert.Version)
+	}
+	if cert.SubjectUniqueId.BitLength > 0 || cert.IssuerUniqueId.BitLength > 0 {
+		if cert.Version < 2 {
+			errs.AddID(errUniqueIDInV1Cert)
+		}
+		if len(cert.Extensions) == 0 && cert.Version != 2 {
+			errs.AddID(errUniqueIDNoExtsNotV2, cert.Version)
+		}
+	}
+
+	// KeyUsage checks: certsign bit iff IsCA
+	if oidInExtensions(OIDExtensionKeyUsage, cert.Extensions) {
+		if cert.IsCA {
+			if (cert.KeyUsage & KeyUsageCertSign) == 0 {
+				errs.AddID(errKeyUsageCANoSign)
+			}
+		} else {
+			if cert.KeyUsage&KeyUsageCertSign == KeyUsageCertSign {
+				errs.AddID(errKeyUsageNonCAKeySign)
+			}
+		}
+	}
+
+	// NameConstraints checks
+	if oidInExtensions(OIDExtensionNameConstraints, cert.Extensions) {
+		if !cert.IsCA {
+			errs.AddID(errNameConstraintsNonCA)
+		}
+	}
+
+	// PolicyMappings checks: issuer policies should appear in certificate policies
+	if oidInExtensions(OIDExtensionPolicyMappings, cert.Extensions) {
+		if !oidInExtensions(OIDExtensionCertificatePolicies, cert.Extensions) {
+			for _, mapOID := range cert.PolicyMappings {
+				errs.AddID(errPolicyMappingsMissingPolicy, mapOID.IssuerPolicy)
+			}
+		} else {
+		maploop:
+			for _, mapOID := range cert.PolicyMappings {
+				for _, oid := range cert.PolicyIdentifiers {
+					if mapOID.IssuerPolicy.Equal(oid) {
+						break maploop
+					}
+				}
+				errs.AddID(errPolicyMappingsMissingPolicy, mapOID.IssuerPolicy)
+			}
+		}
+	}
+
+	// SubjectKeyIdentifier checks
+	if !oidInExtensions(OIDExtensionSubjectKeyId, cert.Extensions) {
+		if cert.IsCA {
+			errs.AddID(errSubjectKeyIDMissingInCA)
+		}
+	}
+
+	// BasicConstraints checks
+	for _, ext := range cert.Extensions {
+		if ext.Id.Equal(OIDExtensionBasicConstraints) {
+			if cert.IsCA && (cert.KeyUsage&KeyUsageCertSign == KeyUsageCertSign) && !ext.Critical {
+				errs.AddID(errBasicConstraintsCANonCritical)
+			}
+			break
+		}
 	}
 }
 
