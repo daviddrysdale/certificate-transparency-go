@@ -48,6 +48,7 @@
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Support unique IDs
+//     - Support FreshestCRL extension
 //     - Support more AuthorityKeyID fields
 //     - Export and use OID values throughout.
 //     - Export OIDFromNamedCurve().
@@ -886,6 +887,7 @@ type Certificate struct {
 
 	// CRL Distribution Points
 	CRLDistributionPoints []string
+	FreshestCRL           []string
 
 	PolicyIdentifiers []asn1.ObjectIdentifier
 	PolicyMappings    []PolicyMapping
@@ -2111,6 +2113,12 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					}
 				}
 
+			case OIDExtensionFreshestCRL[3]:
+				// RFC 5280 4.2.1.15: Freshest CRL
+				if err := parseDistributionPoints(e.Value, &out.FreshestCRL); err != nil {
+					return nil, err
+				}
+
 			default:
 				// Unknown extensions are recorded if critical.
 				unhandled = true
@@ -2427,7 +2435,7 @@ func isIA5String(s string) error {
 }
 
 func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 15 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 16 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -2740,6 +2748,28 @@ func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId 
 		n++
 	}
 
+	if len(template.FreshestCRL) > 0 && !oidInExtensions(OIDExtensionFreshestCRL, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionFreshestCRL
+
+		var crlDp []distributionPoint
+		for _, name := range template.FreshestCRL {
+			dp := distributionPoint{
+				DistributionPoint: distributionPointName{
+					FullName: []asn1.RawValue{
+						asn1.RawValue{Tag: 6, Class: asn1.ClassContextSpecific, Bytes: []byte(name)},
+					},
+				},
+			}
+			crlDp = append(crlDp, dp)
+		}
+
+		ret[n].Value, err = asn1.Marshal(crlDp)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
 	if (len(template.RawSCT) > 0 || len(template.SCTList.SCTList) > 0) && !oidInExtensions(OIDExtensionCTSCT, template.ExtraExtensions) {
 		rawSCT := template.RawSCT
 		if len(template.SCTList.SCTList) > 0 {
@@ -2867,6 +2897,7 @@ var emptyASN1Subject = []byte{0x30, 0}
 //    - InhibitAnyPolicy, InhibitAnyPolicySkip
 //    - PolicyMappings
 //    - CRLDistributionPoints
+//    - FreshestCRL
 //    - RawSCT, SCTList
 //    - ExtraExtensions
 //
