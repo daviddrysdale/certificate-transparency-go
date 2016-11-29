@@ -181,6 +181,13 @@ type authKeyId struct {
 	SerialNumber *big.Int      `asn1:"optional,tag:2"`
 }
 
+type DirectoryAttribute struct {
+	Type   asn1.ObjectIdentifier
+	Values AttributeValueSET
+}
+
+type AttributeValueSET []asn1.RawValue
+
 // SignatureAlgorithm indicates the algorithm used to sign a certificate.
 type SignatureAlgorithm int
 
@@ -778,6 +785,8 @@ type Certificate struct {
 	FreshestCRL           []string
 
 	PolicyIdentifiers []asn1.ObjectIdentifier
+
+	SubjectDirectoryAttributes []DirectoryAttribute
 
 	// Certificate Transparency SCT extension contents; this is a TLS-encoded
 	// SignedCertificateTimestampList (RFC 6962 s3.3).
@@ -1683,6 +1692,41 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 				// RFC 5280 4.2.1.7: Issuer Alternative Name
 				parseAltNamesExtension(e.Value, "issuer", &out.IssuerAltNames, errs)
 
+			case OIDExtensionSubjectDirectoryAttributes[3]:
+				// RFC 5280 4.2.1.8: Subject Directory Attributes
+
+				// id-ce-subjectDirectoryAttributes OBJECT IDENTIFIER ::=  { id-ce 9 }
+				//
+				// SubjectDirectoryAttributes ::= SEQUENCE SIZE (1..MAX) OF Attribute
+				//
+				// Attribute               ::= SEQUENCE {
+				//      type             AttributeType,
+				//      values    SET OF AttributeValue }
+				//            -- at least one value is required
+				//
+				// AttributeType           ::= OBJECT IDENTIFIER
+				//
+				// AttributeValue          ::= ANY -- DEFINED BY AttributeType
+				var rawAttrs []asn1.RawValue
+				if rest, err := asn1.Unmarshal(e.Value, &rawAttrs); err != nil {
+					errs.AddID(errAsn1InvalidSubjectDirAttrs, err.Error())
+				} else if len(rest) != 0 {
+					errs.AddID(errAsn1TrailingSubjectDirAttrs)
+				}
+				for _, v := range rawAttrs {
+					var dirAttr DirectoryAttribute
+					if rest, err := asn1.Unmarshal(v.FullBytes, &dirAttr); err != nil {
+						errs.AddID(errAsn1InvalidSubjectDirAttrs, err.Error())
+						continue
+					} else if len(rest) != 0 {
+						errs.AddID(errAsn1TrailingSubjectDirAttrs)
+					}
+					out.SubjectDirectoryAttributes = append(out.SubjectDirectoryAttributes, dirAttr)
+				}
+				if len(out.SubjectDirectoryAttributes) == 0 {
+					errs.AddID(errSubjectDirAttrsEmpty)
+				}
+
 			case OIDExtensionFreshestCRL[3]:
 				// RFC 5280 4.2.1.15: Freshest CRL
 				var cdp []distributionPoint
@@ -2066,7 +2110,7 @@ func marshalSANs(gnames GeneralNames) (derBytes []byte, err error) {
 }
 
 func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 14 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 15 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -2218,6 +2262,16 @@ func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.E
 			}
 			n++
 		}
+	}
+
+	if len(template.SubjectDirectoryAttributes) > 0 &&
+		!oidInExtensions(OIDExtensionSubjectDirectoryAttributes, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionSubjectDirectoryAttributes
+		ret[n].Value, err = asn1.Marshal(template.SubjectDirectoryAttributes)
+		if err != nil {
+			return
+		}
+		n++
 	}
 
 	if len(template.PolicyIdentifiers) > 0 &&
@@ -2431,6 +2485,7 @@ func signingParamsForPublicKey(pub interface{}, requestedSigAlgo SignatureAlgori
 //    - SubjectTimestamps, SubjectCARepositories
 //    - AltNames and/or DNSNames, EmailAddresses, IPAddresses
 //    - IssuerAltNames
+//    - SubjectDirectoryAttributes
 //    - PolicyIdentifiers
 //    - Permitted (and/or PermittedDNSDomainsCritical, PermittedDNSDomains)
 //    - Excluded (and/or ExcludedDNSDomains)
