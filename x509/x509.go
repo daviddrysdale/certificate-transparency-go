@@ -740,6 +740,10 @@ type Certificate struct {
 	OCSPServer            []string
 	IssuingCertificateURL []string
 
+	// Subject Information Access
+	SubjectTimestamps     []string
+	SubjectCARepositories []string
+
 	// Subject Alternate Name values
 	DNSNames       []string
 	EmailAddresses []string
@@ -1091,7 +1095,7 @@ type generalSubtree struct {
 }
 
 // RFC 5280, 4.2.2.1
-type authorityInfoAccess struct {
+type accessDescription struct {
 	Method   asn1.ObjectIdentifier
 	Location asn1.RawValue
 }
@@ -1561,11 +1565,14 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 			}
 		} else if e.Id.Equal(OIDExtensionAuthorityInfoAccess) {
 			// RFC 5280 4.2.2.1: Authority Information Access
-			var aia []authorityInfoAccess
+			var aia []accessDescription
 			if rest, err := asn1.Unmarshal(e.Value, &aia); err != nil {
 				errs.addIDFatal(errAsn1InvalidInfoAccess, "authority", err.Error())
 			} else if len(rest) != 0 {
 				errs.addIDFatal(errAsn1TrailingInfoAccess, "authority")
+			}
+			if len(aia) == 0 {
+				errs.AddID(errAuthorityInformationAccessEmpty)
 			}
 
 			for _, v := range aia {
@@ -1577,6 +1584,30 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 					out.OCSPServer = append(out.OCSPServer, string(v.Location.Bytes))
 				} else if v.Method.Equal(OIDAuthorityInfoAccessIssuers) {
 					out.IssuingCertificateURL = append(out.IssuingCertificateURL, string(v.Location.Bytes))
+				}
+			}
+		} else if e.Id.Equal(OIDExtensionSubjectInfoAccess) {
+			// RFC 5280 4.2.2.2: Subject Information Access
+			var sia []accessDescription
+			if rest, err := asn1.Unmarshal(e.Value, &sia); err != nil {
+				errs.AddID(errAsn1InvalidInfoAccess, "subject", err.Error())
+			} else if len(rest) != 0 {
+				errs.AddID(errAsn1TrailingInfoAccess, "subject")
+			}
+			if len(sia) == 0 {
+				errs.AddID(errSubjectInformationAccessEmpty)
+			}
+
+			for _, v := range sia {
+				// TODO(drysdale): cope with non-URI types of GeneralName
+				// GeneralName: uniformResourceIdentifier [6] IA5String
+				if v.Location.Tag != 6 {
+					continue
+				}
+				if v.Method.Equal(OIDSubjectInfoAccessTimestamp) {
+					out.SubjectTimestamps = append(out.SubjectTimestamps, string(v.Location.Bytes))
+				} else if v.Method.Equal(OIDSubjectInfoAccessCARepo) {
+					out.SubjectCARepositories = append(out.SubjectCARepositories, string(v.Location.Bytes))
 				}
 			}
 		} else if e.Id.Equal(OIDExtensionCTSCT) {
@@ -1829,6 +1860,8 @@ var extensionCritical = map[string]bool{
 var (
 	OIDAuthorityInfoAccessOCSP    = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 1}
 	OIDAuthorityInfoAccessIssuers = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 2}
+	OIDSubjectInfoAccessTimestamp = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 3}
+	OIDSubjectInfoAccessCARepo    = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 48, 5}
 )
 
 // oidInExtensions returns whether an extension with the given oid exists in
@@ -1864,7 +1897,7 @@ func marshalSANs(dnsNames, emailAddresses []string, ipAddresses []net.IP) (derBy
 }
 
 func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 11 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 12 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -1943,20 +1976,43 @@ func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.E
 	if (len(template.OCSPServer) > 0 || len(template.IssuingCertificateURL) > 0) &&
 		!oidInExtensions(OIDExtensionAuthorityInfoAccess, template.ExtraExtensions) {
 		ret[n].Id = OIDExtensionAuthorityInfoAccess
-		var aiaValues []authorityInfoAccess
+		var aiaValues []accessDescription
 		for _, name := range template.OCSPServer {
-			aiaValues = append(aiaValues, authorityInfoAccess{
+			aiaValues = append(aiaValues, accessDescription{
 				Method:   OIDAuthorityInfoAccessOCSP,
 				Location: asn1.RawValue{Tag: 6, Class: asn1.ClassContextSpecific, Bytes: []byte(name)},
 			})
 		}
 		for _, name := range template.IssuingCertificateURL {
-			aiaValues = append(aiaValues, authorityInfoAccess{
+			aiaValues = append(aiaValues, accessDescription{
 				Method:   OIDAuthorityInfoAccessIssuers,
 				Location: asn1.RawValue{Tag: 6, Class: asn1.ClassContextSpecific, Bytes: []byte(name)},
 			})
 		}
 		ret[n].Value, err = asn1.Marshal(aiaValues)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
+	if len(template.SubjectTimestamps) > 0 || len(template.SubjectCARepositories) > 0 &&
+		!oidInExtensions(OIDExtensionSubjectInfoAccess, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionSubjectInfoAccess
+		var siaValues []accessDescription
+		for _, ts := range template.SubjectTimestamps {
+			siaValues = append(siaValues, accessDescription{
+				Method:   OIDSubjectInfoAccessTimestamp,
+				Location: asn1.RawValue{Tag: 6, Class: asn1.ClassContextSpecific, Bytes: []byte(ts)},
+			})
+		}
+		for _, repo := range template.SubjectCARepositories {
+			siaValues = append(siaValues, accessDescription{
+				Method:   OIDSubjectInfoAccessCARepo,
+				Location: asn1.RawValue{Tag: 6, Class: asn1.ClassContextSpecific, Bytes: []byte(repo)},
+			})
+		}
+		ret[n].Value, err = asn1.Marshal(siaValues)
 		if err != nil {
 			return
 		}
@@ -2132,13 +2188,26 @@ func signingParamsForPublicKey(pub interface{}, requestedSigAlgo SignatureAlgori
 	return
 }
 
-// CreateCertificate creates a new certificate based on a template.
-// The following members of template are used: AuthorityKeyId,
-// BasicConstraintsValid, DNSNames, ExcludedDNSDomains, ExtKeyUsage,
-// IsCA, KeyUsage, MaxPathLen, MaxPathLenZero, NotAfter, NotBefore,
-// PermittedDNSDomains, PermittedDNSDomainsCritical, SerialNumber,
-// SignatureAlgorithm, Subject, SubjectKeyId, UnknownExtKeyUsage,
-// and RawSCT.
+// CreateCertificate creates a new certificate based on a template. The
+// following members of template are used:
+//  - SerialNumber
+//  - Subject
+//  - NotBefore, NotAfter
+//  - SignatureAlgorithm
+//  - For extensions:
+//    - KeyUsage
+//    - ExtKeyUsage
+//    - UnknownExtKeyUsage
+//    - BasicConstraintsValid, IsCA, MaxPathLen, MaxPathLenZero
+//    - SubjectKeyId
+//    - AuthorityKeyId
+//    - OCSPServer, IssuingCertificateURL
+//    - SubjectTimestamps, SubjectCARepositories
+//    - DNSNames, EmailAddresses, IPAddresses
+//    - PolicyIdentifiers
+//    - PermittedDNSDomainsCritical, PermittedDNSDomains, ExcludedDNSDomains
+//    - CRLDistributionPoints
+//    - RawSCT, SCTList
 //
 // The certificate is signed by parent. If parent is equal to template then the
 // certificate is self-signed. The parameter pub is the public key of the
