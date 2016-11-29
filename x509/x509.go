@@ -745,9 +745,15 @@ type Certificate struct {
 	SubjectCARepositories []string
 
 	// Subject Alternate Name values
+	AltNames GeneralNames
+	// The following fields are preserved for back-compatibility, but are equal
+	// to the corresponding fields in AltNames.
 	DNSNames       []string
 	EmailAddresses []string
 	IPAddresses    []net.IP
+
+	// Issuer Alternative Name values
+	IssuerAltNames GeneralNames
 
 	// Name constraints
 	PermittedDNSDomainsCritical bool // if true then the name constraints are marked critical.
@@ -1267,10 +1273,11 @@ func parseDistributionPoints(data []byte, crldp *[]string, errs *Errors) {
 	}
 }
 
-func parseSANExtension(value []byte, errs *Errors) (dnsNames, emailAddresses []string, ipAddresses []net.IP) {
-	// RFC 5280, 4.2.1.6
+func parseAltNamesExtension(value []byte, who string, gname *GeneralNames, errs *Errors) {
+	// RFC 5280, 4.2.1.6, 4.2.17
 
 	// SubjectAltName ::= GeneralNames
+	// IssuerAltName ::= GeneralNames
 	//
 	// GeneralNames ::= SEQUENCE SIZE (1..MAX) OF GeneralName
 	//
@@ -1287,35 +1294,17 @@ func parseSANExtension(value []byte, errs *Errors) (dnsNames, emailAddresses []s
 	var seq asn1.RawValue
 	var rest []byte
 	if rest, err := asn1.Unmarshal(value, &seq); err != nil {
-		errs.addIDFatal(errAsn1InvalidAltName, "subject", err.Error())
+		errs.addIDFatal(errAsn1InvalidAltName, who, err.Error())
 	} else if len(rest) != 0 {
-		errs.addIDFatal(errAsn1TrailingAltName, "subject")
+		errs.addIDFatal(errAsn1TrailingAltName, who)
 	}
 	if !seq.IsCompound || seq.Tag != asn1.TagSequence || seq.Class != asn1.ClassUniversal {
-		errs.addIDFatal(errInvalidAltNameTag, seq.Tag, seq.Class, "subject")
+		errs.addIDFatal(errInvalidAltNameTag, seq.Tag, seq.Class, who)
 	}
 
 	rest = seq.Bytes
 	for len(rest) > 0 {
-		var v asn1.RawValue
-		var err error
-		if rest, err = asn1.Unmarshal(rest, &v); err != nil {
-			errs.addIDFatal(errAsn1InvalidGeneralName, err.Error())
-			return
-		}
-		switch v.Tag {
-		case 1:
-			emailAddresses = append(emailAddresses, string(v.Bytes))
-		case 2:
-			dnsNames = append(dnsNames, string(v.Bytes))
-		case 7:
-			switch len(v.Bytes) {
-			case net.IPv4len, net.IPv6len:
-				ipAddresses = append(ipAddresses, v.Bytes)
-			default:
-				errs.AddID(errGeneralNameIPLen, len(v.Bytes), v.Bytes)
-			}
-		}
+		rest = parseGeneralName(rest, gname, false, errs)
 	}
 
 	return
@@ -1458,7 +1447,13 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 				// TODO: map out.MaxPathLen to 0 if it has the -1 default value? (Issue 19285)
 
 			case OIDExtensionSubjectAltName[3]:
-				out.DNSNames, out.EmailAddresses, out.IPAddresses = parseSANExtension(e.Value, errs)
+				parseAltNamesExtension(e.Value, "subject", &out.AltNames, errs)
+				out.DNSNames = out.AltNames.DNSNames
+				out.EmailAddresses = out.AltNames.EmailAddresses
+				for _, ipNet := range out.AltNames.IPNets {
+					out.IPAddresses = append(out.IPAddresses, ipNet.IP)
+				}
+
 				if len(out.DNSNames) == 0 && len(out.EmailAddresses) == 0 && len(out.IPAddresses) == 0 {
 					// If we didn't parse anything then we do the critical check, below.
 					unhandled = true
@@ -1566,6 +1561,10 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 				for i, policy := range policies {
 					out.PolicyIdentifiers[i] = policy.Policy
 				}
+
+			case OIDExtensionIssuerAltName[3]:
+				// RFC 5280 4.2.1.7: Issuer Alternative Name
+				parseAltNamesExtension(e.Value, "issuer", &out.IssuerAltNames, errs)
 
 			default:
 				// Unknown extensions are recorded if critical.
@@ -1903,19 +1902,19 @@ func oidInExtensions(oid asn1.ObjectIdentifier, extensions []pkix.Extension) boo
 
 // marshalSANs marshals a list of addresses into a the contents of an X.509
 // SubjectAlternativeName extension.
-func marshalSANs(dnsNames, emailAddresses []string, ipAddresses []net.IP) (derBytes []byte, err error) {
+func marshalSANs(gnames GeneralNames) (derBytes []byte, err error) {
 	var rawValues []asn1.RawValue
-	for _, name := range dnsNames {
+	for _, name := range gnames.DNSNames {
 		rawValues = append(rawValues, asn1.RawValue{Tag: 2, Class: asn1.ClassContextSpecific, Bytes: []byte(name)})
 	}
-	for _, email := range emailAddresses {
+	for _, email := range gnames.EmailAddresses {
 		rawValues = append(rawValues, asn1.RawValue{Tag: 1, Class: asn1.ClassContextSpecific, Bytes: []byte(email)})
 	}
-	for _, rawIP := range ipAddresses {
+	for _, rawIP := range gnames.IPNets {
 		// If possible, we always want to encode IPv4 addresses in 4 bytes.
-		ip := rawIP.To4()
+		ip := rawIP.IP.To4()
 		if ip == nil {
-			ip = rawIP
+			ip = rawIP.IP
 		}
 		rawValues = append(rawValues, asn1.RawValue{Tag: 7, Class: asn1.ClassContextSpecific, Bytes: ip})
 	}
@@ -1923,7 +1922,7 @@ func marshalSANs(dnsNames, emailAddresses []string, ipAddresses []net.IP) (derBy
 }
 
 func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 12 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 13 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -2045,14 +2044,35 @@ func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.E
 		n++
 	}
 
-	if (len(template.DNSNames) > 0 || len(template.EmailAddresses) > 0 || len(template.IPAddresses) > 0) &&
-		!oidInExtensions(OIDExtensionSubjectAltName, template.ExtraExtensions) {
-		ret[n].Id = OIDExtensionSubjectAltName
-		ret[n].Value, err = marshalSANs(template.DNSNames, template.EmailAddresses, template.IPAddresses)
-		if err != nil {
-			return
+	if !oidInExtensions(OIDExtensionSubjectAltName, template.ExtraExtensions) {
+		altNames := &template.AltNames
+		if altNames.Empty() && (len(template.DNSNames) > 0 || len(template.EmailAddresses) > 0 || len(template.IPAddresses) > 0) {
+			// Transfer old fields to new position
+			altNames = &GeneralNames{DNSNames: template.DNSNames, EmailAddresses: template.EmailAddresses}
+			for _, ip := range template.IPAddresses {
+				altNames.IPNets = append(altNames.IPNets, net.IPNet{IP: ip})
+			}
 		}
-		n++
+		if altNames.Len() > 0 {
+			ret[n].Id = OIDExtensionSubjectAltName
+			ret[n].Value, err = marshalSANs(*altNames)
+			if err != nil {
+				return
+			}
+			n++
+		}
+	}
+
+	if !oidInExtensions(OIDExtensionIssuerAltName, template.ExtraExtensions) {
+		altNames := &template.IssuerAltNames
+		if altNames.Len() > 0 {
+			ret[n].Id = OIDExtensionIssuerAltName
+			ret[n].Value, err = marshalSANs(*altNames)
+			if err != nil {
+				return
+			}
+			n++
+		}
 	}
 
 	if len(template.PolicyIdentifiers) > 0 &&
@@ -2229,7 +2249,8 @@ func signingParamsForPublicKey(pub interface{}, requestedSigAlgo SignatureAlgori
 //    - AuthorityKeyId
 //    - OCSPServer, IssuingCertificateURL
 //    - SubjectTimestamps, SubjectCARepositories
-//    - DNSNames, EmailAddresses, IPAddresses
+//    - AltNames and/or DNSNames, EmailAddresses, IPAddresses
+//    - IssuerAltNames
 //    - PolicyIdentifiers
 //    - PermittedDNSDomainsCritical, PermittedDNSDomains, ExcludedDNSDomains
 //    - CRLDistributionPoints
@@ -2461,6 +2482,9 @@ type CertificateRequest struct {
 	ExtraExtensions []pkix.Extension
 
 	// Subject Alternate Name values.
+	AltNames GeneralNames
+	// The following fields are preserved for back-compatibility, but are equal
+	// to the corresponding field in AltNames.
 	DNSNames       []string
 	EmailAddresses []string
 	IPAddresses    []net.IP
@@ -2584,17 +2608,26 @@ func CreateCertificateRequest(rand io.Reader, template *CertificateRequest, priv
 
 	var extensions []pkix.Extension
 
-	if (len(template.DNSNames) > 0 || len(template.EmailAddresses) > 0 || len(template.IPAddresses) > 0) &&
-		!oidInExtensions(OIDExtensionSubjectAltName, template.ExtraExtensions) {
-		sanBytes, err := marshalSANs(template.DNSNames, template.EmailAddresses, template.IPAddresses)
-		if err != nil {
-			return nil, err
+	if !oidInExtensions(OIDExtensionSubjectAltName, template.ExtraExtensions) {
+		altNames := &template.AltNames
+		if altNames.Empty() && (len(template.DNSNames) > 0 || len(template.EmailAddresses) > 0 || len(template.IPAddresses) > 0) {
+			// Transfer old fields to new position
+			altNames = &GeneralNames{DNSNames: template.DNSNames, EmailAddresses: template.EmailAddresses}
+			for _, ip := range template.IPAddresses {
+				altNames.IPNets = append(altNames.IPNets, net.IPNet{IP: ip})
+			}
 		}
+		if !altNames.Empty() {
+			sanBytes, err := marshalSANs(*altNames)
+			if err != nil {
+				return nil, err
+			}
 
-		extensions = append(extensions, pkix.Extension{
-			Id:    OIDExtensionSubjectAltName,
-			Value: sanBytes,
-		})
+			extensions = append(extensions, pkix.Extension{
+				Id:    OIDExtensionSubjectAltName,
+				Value: sanBytes,
+			})
+		}
 	}
 
 	extensions = append(extensions, template.ExtraExtensions...)
@@ -2763,10 +2796,16 @@ func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error
 
 	for _, extension := range out.Extensions {
 		if extension.Id.Equal(OIDExtensionSubjectAltName) {
-			out.DNSNames, out.EmailAddresses, out.IPAddresses = parseSANExtension(extension.Value, &errs)
+			parseAltNamesExtension(extension.Value, "subject", &out.AltNames, &errs)
+			out.DNSNames = out.AltNames.DNSNames
+			out.EmailAddresses = out.AltNames.EmailAddresses
+			for _, ipNet := range out.AltNames.IPNets {
+				out.IPAddresses = append(out.IPAddresses, ipNet.IP)
+			}
 			if errs.Fatal() {
 				return nil, &errs
 			}
+			break
 		}
 	}
 

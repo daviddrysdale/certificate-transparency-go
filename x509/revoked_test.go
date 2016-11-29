@@ -1291,7 +1291,7 @@ func TestParseCertificateList(t *testing.T) {
 					"0500") + // NULL
 				("03820101" + // BIT STRING length 0x101
 					"004dcde29667973239cca344c58b72128fb5c5db03efdc75cfb7d9a0410ec03c8cd21160b449cd80224f41ca9d91529295ef7d0179ca4b08bb688cecce13cc07b20ecd87ffde1bc356554083c40bea7a387dacc54b3848b3710acf2fa613d007b12afc37f0a77082655b8dbb6683ba2fc52555e9f74bb5ba9429377ff38e193e799fc05c4c9bbcee29492945a732db67ba3575a79a83427a1f6d18d9ede01c544f3ccd68e5680a9b5418e03e1d80b3e77e69860982a4d21c6b111b07c87fe32c561e871554896b37651d5aaf42b2d092ce8d4dd4ae1d7a97091c0a06c03d71580e0557a51408513fde3012f02dac76536822a564faa2553048729633b68f1fc369")),
-			wantErr: "failed to parse",
+			wantErr: "unknown tag 9",
 		},
 		{
 			desc: "valid-freshest-crl-ext",
@@ -1739,7 +1739,7 @@ func TestParseRevokedCertificate(t *testing.T) {
 						("0101ff") + // critical: true
 						("0403" + // octet string
 							"0a01" + "01")))), // enum:1
-			wantErr: "failed to parse",
+			wantErr: "invalid ASN.1 tag",
 		},
 		{
 			desc: "invalid-issuer-ext-non-critical",
@@ -1900,7 +1900,7 @@ func TestParseIssuingDistributionPoint(t *testing.T) {
 				("a007" + // tag [0] = distributionPoint / DistributionPointName
 					("a005" + // CHOICE [0] = fullName / GeneralNames
 						"8903" + "777777"))), // INVALID: choice 9 not allowed
-			wantErr: "failed to parse GeneralName",
+			wantErr: "unknown tag 9",
 		},
 	}
 	for _, test := range tests {

@@ -57,7 +57,7 @@ func (gn GeneralNames) Empty() bool {
 	return gn.Len() == 0
 }
 
-func parseGeneralNames(value []byte, gname *GeneralNames) error {
+func parseGeneralNames(value []byte, who string, gname *GeneralNames, errs *Errors) {
 	// RFC 5280, 4.2.1.6
 	// GeneralNames ::= SEQUENCE SIZE (1..MAX) OF GeneralName
 	//
@@ -74,44 +74,44 @@ func parseGeneralNames(value []byte, gname *GeneralNames) error {
 	var seq asn1.RawValue
 	var rest []byte
 	if rest, err := asn1.Unmarshal(value, &seq); err != nil {
-		return fmt.Errorf("x509: failed to parse GeneralNames: %v", err)
+		errs.addIDFatal(errAsn1InvalidAltName, who, err.Error())
+		return
 	} else if len(rest) != 0 {
-		return fmt.Errorf("x509: trailing data after GeneralNames")
+		errs.addIDFatal(errAsn1TrailingAltName, who)
 	}
 	if !seq.IsCompound || seq.Tag != asn1.TagSequence || seq.Class != asn1.ClassUniversal {
-		return fmt.Errorf("x509: failed to parse GeneralNames sequence, tag %+v", seq)
+		errs.addIDFatal(errInvalidAltNameTag, seq.Tag, seq.Class, who)
 	}
 
 	rest = seq.Bytes
 	for len(rest) > 0 {
-		var err error
-		rest, err = parseGeneralName(rest, gname, false)
-		if err != nil {
-			return fmt.Errorf("x509: failed to parse GeneralName: %v", err)
-		}
+		rest = parseGeneralName(rest, gname, false, errs)
 	}
-	return nil
+	return
 }
 
-func parseGeneralName(data []byte, gname *GeneralNames, withMask bool) ([]byte, error) {
+func parseGeneralName(data []byte, gname *GeneralNames, withMask bool, errs *Errors) []byte {
 	var v asn1.RawValue
 	var rest []byte
 	var err error
 	rest, err = asn1.Unmarshal(data, &v)
 	if err != nil {
-		return nil, fmt.Errorf("x509: failed to unmarshal GeneralNames: %v", err)
+		errs.addIDFatal(errAsn1InvalidGeneralName, err.Error())
+		return nil
 	}
 	switch v.Tag {
 	case tagOtherName:
 		if !v.IsCompound {
-			return nil, fmt.Errorf("x509: failed to unmarshal GeneralNames.otherName: not compound")
+			errs.addIDFatal(errAsn1InvalidGeneralNameOther, "not compound ASN.1 type")
+			return nil
 		}
 		var other OtherName
 		v.FullBytes = append([]byte{}, v.FullBytes...)
 		v.FullBytes[0] = asn1.TagSequence | 0x20
 		_, err = asn1.Unmarshal(v.FullBytes, &other)
 		if err != nil {
-			return nil, fmt.Errorf("x509: failed to unmarshal GeneralNames.otherName: %v", err)
+			errs.addIDFatal(errAsn1InvalidGeneralNameOther, err.Error())
+			return nil
 		}
 		gname.OtherNames = append(gname.OtherNames, other)
 	case tagRFC822Name:
@@ -122,7 +122,8 @@ func parseGeneralName(data []byte, gname *GeneralNames, withMask bool) ([]byte, 
 	case tagDirectoryName:
 		var rdnSeq pkix.RDNSequence
 		if _, err := asn1.Unmarshal(v.Bytes, &rdnSeq); err != nil {
-			return nil, fmt.Errorf("x509: failed to unmarshal GeneralNames.directoryName: %v", err)
+			errs.addIDFatal(errAsn1InvalidGeneralNameDirName, err.Error())
+			return nil
 		}
 		var dirName pkix.Name
 		dirName.FillFromRDNSequence(&rdnSeq)
@@ -137,7 +138,7 @@ func parseGeneralName(data []byte, gname *GeneralNames, withMask bool) ([]byte, 
 				ipNet := net.IPNet{IP: v.Bytes[0 : vlen/2], Mask: v.Bytes[vlen/2:]}
 				gname.IPNets = append(gname.IPNets, ipNet)
 			default:
-				return nil, fmt.Errorf("x509: invalid IP/mask length %d in GeneralNames.iPAddress", vlen)
+				errs.AddID(errGeneralNameIPMaskLen, len(v.Bytes), v.Bytes)
 			}
 		} else {
 			switch vlen {
@@ -145,7 +146,7 @@ func parseGeneralName(data []byte, gname *GeneralNames, withMask bool) ([]byte, 
 				ipNet := net.IPNet{IP: v.Bytes}
 				gname.IPNets = append(gname.IPNets, ipNet)
 			default:
-				return nil, fmt.Errorf("x509: invalid IP length %d in GeneralNames.iPAddress", vlen)
+				errs.AddID(errGeneralNameIPLen, len(v.Bytes), v.Bytes)
 			}
 		}
 	case tagRegisteredID:
@@ -154,11 +155,11 @@ func parseGeneralName(data []byte, gname *GeneralNames, withMask bool) ([]byte, 
 		v.FullBytes[0] = asn1.TagOID
 		_, err = asn1.Unmarshal(v.FullBytes, &oid)
 		if err != nil {
-			return nil, fmt.Errorf("x509: failed to unmarshal GeneralNames.registeredID: %v", err)
+			errs.addIDFatal(errAsn1InvalidGeneralNameOID)
 		}
 		gname.RegisteredIDs = append(gname.RegisteredIDs, oid)
 	default:
-		return nil, fmt.Errorf("x509: failed to unmarshal GeneralName: unknown tag %d", v.Tag)
+		errs.addIDFatal(errAsn1InvalidGeneralName, fmt.Sprintf("unknown tag %d", v.Tag))
 	}
-	return rest, nil
+	return rest
 }

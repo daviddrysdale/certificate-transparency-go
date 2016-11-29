@@ -1316,7 +1316,8 @@ func marshalAndParseCSR(t *testing.T, template *CertificateRequest) *Certificate
 }
 
 func TestCertificateRequestOverrides(t *testing.T) {
-	sanContents, err := marshalSANs([]string{"foo.example.com"}, nil, nil)
+	names := GeneralNames{DNSNames: []string{"foo.example.com"}}
+	sanContents, err := marshalSANs(names)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1373,7 +1374,8 @@ func TestCertificateRequestOverrides(t *testing.T) {
 		t.Errorf("bad attributes: %#v\n", csr.Attributes)
 	}
 
-	sanContents2, err := marshalSANs([]string{"foo2.example.com"}, nil, nil)
+	names2 := GeneralNames{DNSNames: []string{"foo2.example.com"}}
+	sanContents2, err := marshalSANs(names2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1386,7 +1388,7 @@ func TestCertificateRequestOverrides(t *testing.T) {
 
 	csr = marshalAndParseCSR(t, &template)
 
-	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "foo2.example.com" {
+	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "foo.example.com" {
 		t.Errorf("Attributes did not override ExtraExtensions. Got %v\n", csr.DNSNames)
 	}
 }

@@ -320,6 +320,7 @@ var errorInfo = []Error{
 		Field:    "GeneralName.otherName",
 		SpecRef:  "RFC 5280 s4.1.2.6",
 		Category: InvalidASN1Content,
+		Fatal:    true,
 	},
 	{
 		ID:       errAsn1InvalidGeneralNameDirName,
@@ -327,6 +328,7 @@ var errorInfo = []Error{
 		Field:    "GeneralName.directoryName",
 		SpecRef:  "RFC 5280 s4.1.2.6",
 		Category: InvalidASN1Content,
+		Fatal:    true,
 	},
 	{
 		ID:       errGeneralNameIPMaskLen,
@@ -344,10 +346,11 @@ var errorInfo = []Error{
 	},
 	{
 		ID:       errAsn1InvalidGeneralNameOID,
-		Summary:  "%v",
+		Summary:  "x509: invalid ASN.1 OBJECT-IDENTIFIER",
 		Field:    "GeneralName.registeredID",
 		SpecRef:  "RFC 5280 s4.1.2.6",
 		Category: InvalidASN1Content,
+		Fatal:    true,
 	},
 	{
 		ID:       errAsn1InvalidAltName,

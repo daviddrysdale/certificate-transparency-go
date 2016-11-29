@@ -205,9 +205,7 @@ func ParseCertificateListDER(derBytes []byte) (*CertificateList, error) {
 			certList.TBSCertList.AuthorityKeyID = a.Id
 		case e.Id.Equal(OIDExtensionIssuerAltName):
 			// RFC 5280 s5.2.2
-			if err := parseGeneralNames(e.Value, &certList.TBSCertList.IssuerAltNames); err != nil {
-				errs.addIDFatal(ErrInvalidCertListIssuerAltName, err)
-			}
+			parseGeneralNames(e.Value, "issuer", &certList.TBSCertList.IssuerAltNames, &errs)
 		case e.Id.Equal(OIDExtensionCRLNumber):
 			// RFC 5280 s5.2.3
 			if rest, err := asn1.Unmarshal(e.Value, &certList.TBSCertList.CRLNumber); err != nil {
@@ -299,10 +297,7 @@ func parseIssuingDistributionPoint(data []byte, idp *IssuingDistributionPoint, n
 		data := make([]byte, len(fnData))
 		copy(data, fnData)
 		data[0] = 0x30
-		err := parseGeneralNames(data, name)
-		if err != nil {
-			errs.addIDFatal(ErrCertListIssuingDPInvalidFullName, err)
-		}
+		parseGeneralNames(data, "issuing-dp", name, errs)
 	}
 }
 
@@ -347,9 +342,7 @@ func parseRevokedCertificate(pkixRevoked pkix.RevokedCertificate, errs *Errors) 
 			}
 		case e.Id.Equal(OIDExtensionCertificateIssuer):
 			// RFC 5280, s5.3.3
-			if err := parseGeneralNames(e.Value, &result.Issuer); err != nil {
-				errs.addIDFatal(ErrInvalidRevocationIssuer, err)
-			}
+			parseGeneralNames(e.Value, "cert-issuer", &result.Issuer, errs)
 		default:
 			if e.Critical {
 				errs.addIDFatal(ErrUnhandledCriticalRevokedCertExtension, e.Id)
