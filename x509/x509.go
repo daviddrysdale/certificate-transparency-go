@@ -1348,6 +1348,14 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 
 	out.Version = in.TBSCertificate.Version + 1
 	out.SerialNumber = in.TBSCertificate.SerialNumber
+	if errs != nil {
+		sgn := out.SerialNumber.Sign()
+		if sgn < 0 {
+			errs.AddID(errSerialNumberNegative)
+		} else if sgn == 0 {
+			errs.AddID(errSerialNumberZero)
+		}
+	}
 	out.IssuerUniqueId = in.TBSCertificate.UniqueId
 	out.SubjectUniqueId = in.TBSCertificate.SubjectUniqueId
 
