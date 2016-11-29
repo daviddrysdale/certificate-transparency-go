@@ -2675,6 +2675,7 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "CertPoliciesDuplicate", in: "testdata/invalid/xf-ext-cert-policies-dup.pem", wantErr: "duplicate policy"},
 		{desc: "CertPoliciesUnknownAny", in: "testdata/invalid/xf-ext-cert-policies-any-qual.pem", wantErr: "unknown policy qualifier"},
 		{desc: "SubjectInfoEmpty", in: "testdata/invalid/xf-ext-subject-info-empty.pem", wantErr: "empty SubjectInfoAccess"},
+		{desc: "SubjectDirAttrEmpty", in: "testdata/invalid/xf-ext-subject-dirattr-empty.pem", wantErr: "empty X.509 subject directory attributes"},
 	}
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {

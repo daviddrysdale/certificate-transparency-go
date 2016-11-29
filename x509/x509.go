@@ -49,6 +49,7 @@
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Support unique IDs
 //     - Support FreshestCRL extension
+//     - Support SubjectDirectoryAttributes extension
 //     - Support more AuthorityKeyID fields
 //     - Export and use OID values throughout.
 //     - Export OIDFromNamedCurve().
@@ -241,6 +242,13 @@ type authKeyId struct {
 	Issuer       asn1.RawValue `asn1:"optional,tag:1"`
 	SerialNumber *big.Int      `asn1:"optional,tag:2"`
 }
+
+type DirectoryAttribute struct {
+	Type   asn1.ObjectIdentifier
+	Values AttributeValueSET
+}
+
+type AttributeValueSET []asn1.RawValue
 
 // SignatureAlgorithm indicates the algorithm used to sign a certificate.
 type SignatureAlgorithm int
@@ -903,6 +911,8 @@ type Certificate struct {
 
 	RPKIAddressRanges                   []*IPAddressFamilyBlocks
 	RPKIASNumbers, RPKIRoutingDomainIDs *ASIdentifiers
+
+	SubjectDirectoryAttributes []DirectoryAttribute
 
 	// Certificate Transparency SCT extension contents; this is a TLS-encoded
 	// SignedCertificateTimestampList (RFC 6962 s3.3).
@@ -2078,6 +2088,41 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					return nil, errors.New("x509: negative skip count in X.509 inhibit any policy")
 				}
 
+			case OIDExtensionSubjectDirectoryAttributes[3]:
+				// RFC 5280 4.2.1.8: Subject Directory Attributes
+
+				// id-ce-subjectDirectoryAttributes OBJECT IDENTIFIER ::=  { id-ce 9 }
+				//
+				// SubjectDirectoryAttributes ::= SEQUENCE SIZE (1..MAX) OF Attribute
+				//
+				// Attribute               ::= SEQUENCE {
+				//      type             AttributeType,
+				//      values    SET OF AttributeValue }
+				//            -- at least one value is required
+				//
+				// AttributeType           ::= OBJECT IDENTIFIER
+				//
+				// AttributeValue          ::= ANY -- DEFINED BY AttributeType
+				var rawAttrs []asn1.RawValue
+				if rest, err := asn1.Unmarshal(e.Value, &rawAttrs); err != nil {
+					return nil, err
+				} else if len(rest) != 0 {
+					return nil, errors.New("x509: trailing data after X.509 subject directory attributes")
+				}
+				for _, v := range rawAttrs {
+					var dirAttr DirectoryAttribute
+					if rest, err := asn1.Unmarshal(v.FullBytes, &dirAttr); err != nil {
+						nfe.AddError(fmt.Errorf("x509: invalid X.509 subject directory attribute: %v", err))
+						continue
+					} else if len(rest) != 0 {
+						nfe.AddError(errors.New("x509: trailing data after X.509 subject directory attribute"))
+					}
+					out.SubjectDirectoryAttributes = append(out.SubjectDirectoryAttributes, dirAttr)
+				}
+				if len(out.SubjectDirectoryAttributes) == 0 {
+					nfe.AddError(errors.New("x509: empty X.509 subject directory attributes extension"))
+				}
+
 			case OIDExtensionPolicyConstraints[3]:
 				// RFC 5280 4.2.1.11: Policy Constraints
 				var constraints policyConstraints
@@ -2435,7 +2480,7 @@ func isIA5String(s string) error {
 }
 
 func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 16 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 17 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -2567,6 +2612,16 @@ func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId 
 		// subjectAltName extension ... is marked as critical”
 		ret[n].Critical = subjectIsEmpty
 		ret[n].Value, err = marshalSANs(template.DNSNames, template.EmailAddresses, template.IPAddresses, template.URIs)
+		if err != nil {
+			return
+		}
+		n++
+	}
+
+	if len(template.SubjectDirectoryAttributes) > 0 &&
+		!oidInExtensions(OIDExtensionSubjectDirectoryAttributes, template.ExtraExtensions) {
+		ret[n].Id = OIDExtensionSubjectDirectoryAttributes
+		ret[n].Value, err = asn1.Marshal(template.SubjectDirectoryAttributes)
 		if err != nil {
 			return
 		}
@@ -2889,6 +2944,7 @@ var emptyASN1Subject = []byte{0x30, 0}
 //    - OCSPServer, IssuingCertificateURL
 //    - SubjectTimestamps, SubjectCARepositories
 //    - DNSNames, EmailAddresses, IPAddresses, URIs
+//    - SubjectDirectoryAttributes
 //    - PolicyIdentifiers
 //    - ExcludedDNSDomains, ExcludedIPRanges, ExcludedEmailAddresses, ExcludedURIDomains, PermittedDNSDomainsCritical,
 //      PermittedDNSDomains, PermittedIPRanges, PermittedEmailAddresses, PermittedURIDomains
