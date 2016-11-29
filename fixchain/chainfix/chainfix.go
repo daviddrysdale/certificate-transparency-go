@@ -56,11 +56,9 @@ func processChains(file string, fl *fixchain.FixAndLog) {
 		}
 		var chain []*x509.Certificate
 		for _, derBytes := range m.Chain {
-			cert, err := x509.ParseCertificate(derBytes)
-			if err != nil {
-				if errs, ok := err.(x509.Errors); !ok || errs.Fatal() {
-					log.Fatalf("can't parse certificate: %s %#v", err, derBytes)
-				}
+			cert, errs := x509.ParseCertificateLax(derBytes)
+			if errs.Fatal() {
+				log.Fatalf("can't parse certificate: %s %#v", errs.FirstFatal(), derBytes)
 			}
 
 			chain = append(chain, cert)
