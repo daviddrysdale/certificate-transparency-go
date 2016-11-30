@@ -1632,6 +1632,7 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 					}
 				}
 				out.PermittedDNSDomains = out.Permitted.DNSNames
+				out.PermittedDNSDomainsCritical = e.Critical
 
 			case OIDExtensionCRLDistributionPoints[3]:
 				// RFC 5280, 4.2.1.13
