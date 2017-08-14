@@ -35,6 +35,7 @@ import (
 	"github.com/golang/mock/gomock"
 	ct "github.com/google/certificate-transparency-go"
 	"github.com/google/certificate-transparency-go/tls"
+	"github.com/google/certificate-transparency-go/trillian/ctfe/configpb"
 	cttestonly "github.com/google/certificate-transparency-go/trillian/ctfe/testonly"
 	"github.com/google/certificate-transparency-go/trillian/mockclient"
 	"github.com/google/certificate-transparency-go/trillian/testdata"
@@ -121,7 +122,12 @@ func setupTest(t *testing.T, pemRoots []string, signer *crypto.Signer) handlerTe
 		rejectExpired: false,
 		extKeyUsages:  []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}
-	info.c = *NewLogContext(0x42, "test", vOpts, info.client, signer, time.Millisecond*500, fakeTimeSource, monitoring.InertMetricFactory{})
+	cfg := configpb.LogConfig{
+		LogId:      0x42,
+		Prefix:     "test",
+		CrlSupport: true,
+	}
+	info.c = *NewLogContext(&cfg, vOpts, info.client, signer, time.Millisecond*500, fakeTimeSource, monitoring.InertMetricFactory{})
 
 	for _, pemRoot := range pemRoots {
 		if !info.roots.AppendCertsFromPEM([]byte(pemRoot)) {

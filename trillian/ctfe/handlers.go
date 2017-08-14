@@ -89,6 +89,8 @@ const (
 	GetEntriesName        = EntrypointName("GetEntries")
 	GetRootsName          = EntrypointName("GetRoots")
 	GetEntryAndProofName  = EntrypointName("GetEntryAndProof")
+	// Experimental. Do not rely on!
+	AddCRLName = EntrypointName("AddCRL")
 )
 
 var (
@@ -116,7 +118,7 @@ func setupMetrics(mf monitoring.MetricFactory) {
 }
 
 // Entrypoints is a list of entrypoint names as exposed in statistics/logging.
-var Entrypoints = []EntrypointName{AddChainName, AddPreChainName, GetSTHName, GetSTHConsistencyName, GetProofByHashName, GetEntriesName, GetRootsName, GetEntryAndProofName}
+var Entrypoints = []EntrypointName{AddChainName, AddPreChainName, GetSTHName, GetSTHConsistencyName, GetProofByHashName, GetEntriesName, GetRootsName, GetEntryAndProofName, AddCRLName}
 
 // PathHandlers maps from a path to the relevant AppHandler instance.
 type PathHandlers map[string]AppHandler
@@ -225,6 +227,8 @@ func NewLogContext(cfg *configpb.LogConfig, validationOpts CertValidationOpts, r
 		rpcDeadline:    rpcDeadline,
 		TimeSource:     timeSource,
 		validationOpts: validationOpts,
+		noCertSupport:  cfg.NoCertSupport,
+		crlSupport:     cfg.CrlSupport,
 	}
 	once.Do(func() { setupMetrics(mf) })
 	knownLogs.Set(1.0, strconv.FormatInt(cfg.LogId, 10))
@@ -241,9 +245,7 @@ func (c LogContext) Handlers(prefix string) PathHandlers {
 	prefix = strings.TrimRight(prefix, "/")
 
 	// Bind the LogContext instance to give an appHandler instance for each entrypoint.
-	return PathHandlers{
-		prefix + ct.AddChainPath:          AppHandler{Context: c, Handler: addChain, Name: AddChainName, Method: http.MethodPost},
-		prefix + ct.AddPreChainPath:       AppHandler{Context: c, Handler: addPreChain, Name: AddPreChainName, Method: http.MethodPost},
+	handlers := PathHandlers{
 		prefix + ct.GetSTHPath:            AppHandler{Context: c, Handler: getSTH, Name: GetSTHName, Method: http.MethodGet},
 		prefix + ct.GetSTHConsistencyPath: AppHandler{Context: c, Handler: getSTHConsistency, Name: GetSTHConsistencyName, Method: http.MethodGet},
 		prefix + ct.GetProofByHashPath:    AppHandler{Context: c, Handler: getProofByHash, Name: GetProofByHashName, Method: http.MethodGet},
@@ -251,28 +253,36 @@ func (c LogContext) Handlers(prefix string) PathHandlers {
 		prefix + ct.GetRootsPath:          AppHandler{Context: c, Handler: getRoots, Name: GetRootsName, Method: http.MethodGet},
 		prefix + ct.GetEntryAndProofPath:  AppHandler{Context: c, Handler: getEntryAndProof, Name: GetEntryAndProofName, Method: http.MethodGet},
 	}
+	if !c.noCertSupport {
+		handlers[prefix+ct.AddChainPath] = AppHandler{Context: c, Handler: addChain, Name: AddChainName, Method: http.MethodPost}
+		handlers[prefix+ct.AddPreChainPath] = AppHandler{Context: c, Handler: addPreChain, Name: AddPreChainName, Method: http.MethodPost}
+	}
+	if c.crlSupport {
+		handlers[prefix+ct.AddCRLPath] = AppHandler{Context: c, Handler: addCRL, Name: AddCRLName, Method: http.MethodPost}
+	}
+	return handlers
 }
 
-func parseBodyAsJSONChain(c LogContext, r *http.Request) (ct.AddChainRequest, error) {
+func parseBodyAsJSONChain(c LogContext, r *http.Request) (*ct.AddChainRequest, error) {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		glog.V(1).Infof("%s: Failed to read request body: %v", c.LogPrefix, err)
-		return ct.AddChainRequest{}, err
+		return nil, err
 	}
 
 	var req ct.AddChainRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		glog.V(1).Infof("%s: Failed to parse request body: %v", c.LogPrefix, err)
-		return ct.AddChainRequest{}, err
+		return nil, err
 	}
 
 	// The cert chain is not allowed to be empty. We'll defer other validation for later
 	if len(req.Chain) == 0 {
 		glog.V(1).Infof("%s: Request chain is empty: %s", c.LogPrefix, body)
-		return ct.AddChainRequest{}, errors.New("cert chain was empty")
+		return nil, errors.New("cert chain was empty")
 	}
 
-	return req, nil
+	return &req, nil
 }
 
 // addChainInternal is called by add-chain and add-pre-chain as the logic involved in
@@ -291,11 +301,11 @@ func addChainInternal(ctx context.Context, c LogContext, w http.ResponseWriter, 
 	// Check the contents of the request and convert to slice of certificates.
 	addChainReq, err := parseBodyAsJSONChain(c, r)
 	if err != nil {
-		return http.StatusBadRequest, fmt.Errorf("failed to parse add-chain body: %v", err)
+		return http.StatusBadRequest, fmt.Errorf("failed to parse add-[pre-]chain body: %v", err)
 	}
 	chain, err := verifyAddChain(c, addChainReq, w, isPrecert)
 	if err != nil {
-		return http.StatusBadRequest, fmt.Errorf("failed to verify add-chain contents: %v", err)
+		return http.StatusBadRequest, fmt.Errorf("failed to verify add-[pre-]chain contents: %v", err)
 	}
 
 	// Get the current time in the form used throughout RFC6962, namely milliseconds since Unix
@@ -311,9 +321,12 @@ func addChainInternal(ctx context.Context, c LogContext, w http.ResponseWriter, 
 	if err != nil {
 		return http.StatusInternalServerError, fmt.Errorf("failed to build LogLeaf: %v", err)
 	}
+	return queueLeafAndReply(ctx, c, w, method, &leaf)
+}
 
+func queueLeafAndReply(ctx context.Context, c LogContext, w http.ResponseWriter, method EntrypointName, leaf *trillian.LogLeaf) (int, error) {
 	// Send the Merkle tree leaf on to the Log server.
-	req := trillian.QueueLeavesRequest{LogId: c.logID, Leaves: []*trillian.LogLeaf{&leaf}}
+	req := trillian.QueueLeavesRequest{LogId: c.logID, Leaves: []*trillian.LogLeaf{leaf}}
 
 	glog.V(2).Infof("%s: %s => grpc.QueueLeaves", c.LogPrefix, method)
 	rsp, err := c.rpcClient.QueueLeaves(ctx, &req)
@@ -360,6 +373,76 @@ func addChain(ctx context.Context, c LogContext, w http.ResponseWriter, r *http.
 
 func addPreChain(ctx context.Context, c LogContext, w http.ResponseWriter, r *http.Request) (int, error) {
 	return addChainInternal(ctx, c, w, r, true)
+}
+
+func parseBodyAsCRLChain(c LogContext, r *http.Request) (*ct.AddCRLRequest, error) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		glog.V(1).Infof("%s: Failed to read request body: %v", c.LogPrefix, err)
+		return nil, err
+	}
+
+	var req ct.AddCRLRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		glog.V(1).Infof("%s: Failed to parse request body: %v", c.LogPrefix, err)
+		return nil, err
+	}
+
+	// The cert chain is not allowed to be empty. We'll defer other validation for later
+	if len(req.Chain) == 0 {
+		glog.V(1).Infof("%s: Request chain is empty: %s", c.LogPrefix, body)
+		return nil, errors.New("cert chain was empty")
+	}
+
+	return &req, nil
+}
+
+func addCRL(ctx context.Context, c LogContext, w http.ResponseWriter, r *http.Request) (int, error) {
+	// Check the contents of the request and convert to slice of certificates.
+	addCRLReq, err := parseBodyAsCRLChain(c, r)
+	if err != nil {
+		return http.StatusBadRequest, fmt.Errorf("failed to parse add-crl body: %v", err)
+	}
+	crl, chain, err := verifyAddCRL(c, addCRLReq, w)
+	if err != nil {
+		return http.StatusBadRequest, fmt.Errorf("failed to verify add-crl contents: %v", err)
+	}
+
+	// Get the current time in the form used throughout RFC6962, namely milliseconds since Unix
+	// epoch, and use this throughout.
+	timeMillis := uint64(c.TimeSource.Now().UnixNano() / millisPerNano)
+
+	// Build the MerkleTreeLeaf that gets sent to the backend, and make a trillian.LogLeaf for it.
+	merkleLeaf := ct.MerkleTreeLeafFromCRL(crl, timeMillis)
+	leafData, err := tls.Marshal(*merkleLeaf)
+	if err != nil {
+		return http.StatusInternalServerError, fmt.Errorf("failed to serialize Merkle leaf: %v", err)
+	}
+
+	// For a CRL, the extra data is a TLS-encoded:
+	//   ASN.1Cert certificate_chain<0..2^24-1>;
+	// containing the chain.
+	extra := ct.CertificateChain{
+		Entries: make([]ct.ASN1Cert, len(chain)),
+	}
+	for i := 0; i < len(chain); i++ {
+		extra.Entries[i] = ct.ASN1Cert{Data: chain[i].Raw}
+	}
+	extraData, err := tls.Marshal(extra)
+	if err != nil {
+		return http.StatusInternalServerError, fmt.Errorf("failed to serialize extra data: %v", err)
+	}
+
+	// leafIDHash allows Trillian to detect duplicate entries, so this should be
+	// a hash over the CRL data.
+	leafIDHash := sha256.Sum256(crl.Raw)
+
+	leaf := trillian.LogLeaf{
+		LeafIdentityHash: leafIDHash[:],
+		LeafValue:        leafData,
+		ExtraData:        extraData,
+	}
+	return queueLeafAndReply(ctx, c, w, AddCRLName, &leaf)
 }
 
 // GetTreeHead retrieves and builds a tree head structure for the given log; the returned
@@ -677,7 +760,7 @@ func getRPCDeadlineTime(c LogContext) time.Time {
 // cert is of the correct type and chains to a trusted root.
 // TODO(Martin2112): This may not implement all the RFC requirements. Check what is provided
 // by fixchain (called by this code) plus the ones here to make sure that it is compliant.
-func verifyAddChain(c LogContext, req ct.AddChainRequest, w http.ResponseWriter, expectingPrecert bool) ([]*x509.Certificate, error) {
+func verifyAddChain(c LogContext, req *ct.AddChainRequest, w http.ResponseWriter, expectingPrecert bool) ([]*x509.Certificate, error) {
 	// We already checked that the chain is not empty so can move on to verification
 	validPath, err := ValidateChain(req.Chain, c.validationOpts)
 	if err != nil {
@@ -702,6 +785,30 @@ func verifyAddChain(c LogContext, req ct.AddChainRequest, w http.ResponseWriter,
 	}
 
 	return validPath, nil
+}
+
+// verifyAddCRL checks the given add-crl request by checking the CRL is signed by
+// chain[0] and the chain as a whole chains to a trusted root.
+func verifyAddCRL(c LogContext, req *ct.AddCRLRequest, w http.ResponseWriter) (*x509.CertificateList, []*x509.Certificate, error) {
+	// We already checked that the chain is not empty so we can safely verify it chains OK.
+	chain, err := ValidateChain(req.Chain, c.validationOpts)
+	if err != nil {
+		// We rejected it because the cert failed checks or we could not find a path to a root etc.
+		// Lots of possible causes for errors
+		return nil, nil, fmt.Errorf("chain failed to verify: %v because: %v", req, err)
+	}
+
+	crl, err := x509.ParseCertificateList(req.CRL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("crl did not parse: %v", err)
+	}
+
+	// The CRL must be signed by chain[0].
+	if err := chain[0].CheckCertificateListSignature(crl); err != nil {
+		return nil, nil, fmt.Errorf("crl signature validation failed: %v", err)
+	}
+
+	return crl, chain, nil
 }
 
 // buildLogLeafForAddChain is also used by add-pre-chain and does the hashing to build a
