@@ -47,6 +47,8 @@ func SerializeSCTSignatureInput(sct SignedCertificateTimestamp, entry LogEntry) 
 			}
 		case XJSONLogEntryType:
 			input.JSONEntry = entry.Leaf.TimestampedEntry.JSONEntry
+		case CRLLogEntryType:
+			input.CRLEntry = entry.Leaf.TimestampedEntry.CRLEntry
 		default:
 			return nil, fmt.Errorf("unsupported entry type %s", entry.Leaf.TimestampedEntry.EntryType)
 		}
@@ -78,7 +80,7 @@ func SerializeSTHSignatureInput(sth SignedTreeHead) ([]byte, error) {
 	}
 }
 
-// CreateX509MerkleTreeLeaf generates a MerkleTreeLeaf for an X509 cert
+// CreateX509MerkleTreeLeaf generates a MerkleTreeLeaf for an X509 cert.
 func CreateX509MerkleTreeLeaf(cert ASN1Cert, timestamp uint64) *MerkleTreeLeaf {
 	return &MerkleTreeLeaf{
 		Version:  V1,
@@ -91,7 +93,7 @@ func CreateX509MerkleTreeLeaf(cert ASN1Cert, timestamp uint64) *MerkleTreeLeaf {
 	}
 }
 
-// CreateJSONMerkleTreeLeaf creates the merkle tree leaf for json data.
+// CreateJSONMerkleTreeLeaf creates the Merkle tree leaf for json data.
 func CreateJSONMerkleTreeLeaf(data interface{}, timestamp uint64) *MerkleTreeLeaf {
 	jsonData, err := json.Marshal(AddJSONRequest{Data: data})
 	if err != nil {
@@ -215,7 +217,7 @@ func LogEntryFromLeaf(index int64, leafEntry *LeafEntry) (*LogEntry, error) {
 	var err error
 	entry := LogEntry{Index: index, Leaf: leaf}
 	switch leaf.TimestampedEntry.EntryType {
-	case X509LogEntryType:
+	case X509LogEntryType, CRLLogEntryType:
 		var certChain CertificateChain
 		if rest, err := tls.Unmarshal(leafEntry.ExtraData, &certChain); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal ExtraData for index %d: %v", index, err)
@@ -252,4 +254,22 @@ func LogEntryFromLeaf(index int64, leafEntry *LeafEntry) (*LogEntry, error) {
 	}
 	// err may hold a x509.NonFatalErrors object.
 	return &entry, err
+}
+
+// MerkleTreeLeafFromRawCRL creates a MerkleTreeLeaf for a CRL in DER-encoded form.
+func MerkleTreeLeafFromRawCRL(crl ASN1CRL, timestamp uint64) *MerkleTreeLeaf {
+	return &MerkleTreeLeaf{
+		Version:  V1,
+		LeafType: TimestampedEntryLeafType,
+		TimestampedEntry: &TimestampedEntry{
+			Timestamp: timestamp,
+			EntryType: CRLLogEntryType,
+			CRLEntry:  &crl,
+		},
+	}
+}
+
+// MerkleTreeLeafFromCRL creates a MerkleTreeLeaf for a CRL.
+func MerkleTreeLeafFromCRL(crl *x509.CertificateList, timestamp uint64) *MerkleTreeLeaf {
+	return MerkleTreeLeafFromRawCRL(ASN1CRL{Data: crl.Raw}, timestamp)
 }

@@ -39,6 +39,7 @@ const (
 	X509LogEntryType    LogEntryType = 0
 	PrecertLogEntryType LogEntryType = 1
 	XJSONLogEntryType   LogEntryType = 0x8000 // Experimental.  Don't rely on this!
+	CRLLogEntryType     LogEntryType = 0x8001 // Experimental.  Don't rely on this!
 )
 
 func (e LogEntryType) String() string {
@@ -49,6 +50,8 @@ func (e LogEntryType) String() string {
 		return "PrecertLogEntryType"
 	case XJSONLogEntryType:
 		return "XJSONLogEntryType"
+	case CRLLogEntryType:
+		return "CRLLogEntryType"
 	default:
 		return fmt.Sprintf("UnknownEntryType(%d)", e)
 	}
@@ -127,6 +130,12 @@ type PreCert struct {
 	TBSCertificate []byte `tls:"minlen:1,maxlen:16777215"` // DER-encoded TBSCertificate
 }
 
+// ASN1CRL type for holding the raw DER bytes of an ASN.1 CertificateList
+// Experimental; do not rely on this.
+type ASN1CRL struct {
+	Data []byte `tls:"minlen:1,maxlen:16777215"`
+}
+
 // CTExtensions is a representation of the raw bytes of any CtExtension
 // structure (see section 3.2).
 // nolint: golint
@@ -199,17 +208,18 @@ func (d *DigitallySigned) UnmarshalJSON(b []byte) error {
 type LogEntry struct {
 	Index int64
 	Leaf  MerkleTreeLeaf
-	// Exactly one of the following three fields should be non-empty.
+	// Exactly one of the following fields should be non-empty.
 	X509Cert *x509.Certificate // Parsed X.509 certificate
 	Precert  *Precertificate   // Extracted precertificate
 	JSONData []byte
+	CRL      *x509.CertificateList // Parsed X.509 CRL
 
 	// Chain holds the issuing certificate chain, starting with the
 	// issuer of the leaf certificate / pre-certificate.
 	Chain []ASN1Cert
 }
 
-// PrecertChainEntry holds an precertificate together with a validation chain
+// PrecertChainEntry holds a precertificate together with a validation chain
 // for it; see section 3.1.
 type PrecertChainEntry struct {
 	PreCertificate   ASN1Cert   `tls:"minlen:1,maxlen:16777215"`
@@ -225,6 +235,13 @@ type CertificateChain struct {
 // JSONDataEntry holds arbitrary data.
 type JSONDataEntry struct {
 	Data []byte `tls:"minlen:0,maxlen:1677215"`
+}
+
+// CRLChainEntry holds a certificate revocation list together with a validation
+// chain for it.
+type CRLChainEntry struct {
+	CRL              ASN1CRL    `tls:"minlen:1,maxlen:16777215"`
+	CertificateChain []ASN1Cert `tls:"minlen:0,maxlen:16777215"`
 }
 
 // SHA256Hash represents the output from the SHA256 hash function.
@@ -304,6 +321,7 @@ type CertificateTimestamp struct {
 	X509Entry     *ASN1Cert      `tls:"selector:EntryType,val:0"`
 	PrecertEntry  *PreCert       `tls:"selector:EntryType,val:1"`
 	JSONEntry     *JSONDataEntry `tls:"selector:EntryType,val:32768"`
+	CRLEntry      *ASN1CRL       `tls:"selector:EntryType,val:32769"`
 	Extensions    CTExtensions   `tls:"minlen:0,maxlen:65535"`
 }
 
@@ -322,6 +340,7 @@ type TimestampedEntry struct {
 	X509Entry    *ASN1Cert      `tls:"selector:EntryType,val:0"`
 	PrecertEntry *PreCert       `tls:"selector:EntryType,val:1"`
 	JSONEntry    *JSONDataEntry `tls:"selector:EntryType,val:32768"`
+	CRLEntry     *ASN1CRL       `tls:"selector:EntryType,val:32769"`
 	Extensions   CTExtensions   `tls:"minlen:0,maxlen:65535"`
 }
 
@@ -379,7 +398,8 @@ const (
 	GetRootsPath          = "/ct/v1/get-roots"
 	GetEntryAndProofPath  = "/ct/v1/get-entry-and-proof"
 
-	AddJSONPath = "/ct/v1/add-json" // Experimental addition
+	AddJSONPath = "/ct/v1/add-json"  // Experimental addition
+	AddCRLPath  = "/ct/v1.1/add-crl" // Experimental addition
 )
 
 // AddChainRequest represents the JSON request body sent to the add-chain and
@@ -405,6 +425,14 @@ type AddChainResponse struct {
 // This is an experimental addition not covered by RFC6962.
 type AddJSONRequest struct {
 	Data interface{} `json:"data"`
+}
+
+// AddCRLRequest represents the JSON request body sent to the add-crl POST method.
+// The corresponding response re-uses AddChainResponse.
+// This is an experimental addition not covered by RFC6962.
+type AddCRLRequest struct {
+	CRL   []byte   `json:"crl"`
+	Chain [][]byte `json:"chain"`
 }
 
 // GetSTHResponse respresents the JSON response to the get-sth GET method from section 4.3.
