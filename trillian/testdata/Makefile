@@ -1,7 +1,7 @@
-all: pubkeys ca leaves
+all: pubkeys ca leaves crl
 
 # The following private keys are never regenerated.
-SERVER_PRIVKEYS=ct-http-server.privkey.pem log-rpc-server.privkey.pem map-rpc-server.privkey.pem
+SERVER_PRIVKEYS=ct-http-server.privkey.pem log-rpc-server.privkey.pem
 
 # Corresponding passwords:
 CT_HTTP_PWD=dirk
@@ -13,8 +13,6 @@ SERVER_PUBKEYS=$(subst .privkey,.pubkey,$(SERVER_PRIVKEYS))
 
 # Build public keys from private keys
 pubkeys: $(SERVER_PUBKEYS)
-map-rpc-server.pubkey.pem: map-rpc-server.privkey.pem
-	openssl ec -in $< -pubout -out $@ -passin pass:$(MAP_RPC_PWD)
 log-rpc-server.pubkey.pem: log-rpc-server.privkey.pem
 	openssl ec -in $< -pubout -out $@ -passin pass:$(LOG_RPC_PWD)
 ct-http-server.pubkey.pem: ct-http-server.privkey.pem
@@ -51,6 +49,20 @@ int-ca.cert: int-ca.csr.pem fake-ca.privkey.pem fake-ca.cert
 show-int-ca: int-ca.cert
 	openssl x509 -inform pem -in $< -text -noout
 
+# CRL
+crl: int-ca-crl.pem crldir
+crldir:
+	mkdir -p $@
+crldir/index.txt: | crldir
+	touch $@
+crldir/number: | crldir
+	echo 00 > $@
+int-ca-crl.pem: int-ca.cert int-ca.privkey.pem crldir/index.txt crldir/number
+	openssl ca -config int-ca.cfg -gencrl -keyfile int-ca.privkey.pem -passin pass:$(INT_CA_PWD) -cert int-ca.cert -out $@
+int-ca-crl.der: int-ca-crl.pem
+	openssl crl -inform PEM -in $< -outform DER -out $@
+
+
 # Leaf Certificates
 LEAF_CERTS=leaf01.cert leaf02.cert leaf03.cert leaf04.cert leaf05.cert leaf06.cert leaf07.cert leaf08.cert leaf09.cert leaf10.cert \
 	leaf11.cert leaf12.cert leaf13.cert leaf14.cert leaf15.cert leaf16.cert leaf17.cert leaf18.cert leaf19.cert leaf20.cert
@@ -63,7 +75,7 @@ leaf%.csr.pem: leaf.privkey.pem
 show-leaf%-csr: leaf%.csr.pem
 	openssl req -in $< -text -noout
 leaf%.cert: leaf%.csr.pem leaf.privkey.pem int-ca.cert
-	openssl x509 -req -in $< -sha256 -extfile int-ca.cfg -extensions v3_user -CA int-ca.cert -CAkey int-ca.privkey.pem  -passin pass:$(INT_CA_PWD) -set_serial 0xdeadbeef -days 2600 -out $@
+	openssl x509 -req -in $< -sha256 -extfile int-ca.cfg -extensions v3_user -CA int-ca.cert -CAkey int-ca.privkey.pem -passin pass:$(INT_CA_PWD) -set_serial 0xdeadbeef -days 2600 -out $@
 show-leaf%: leaf%.cert
 	openssl x509 -inform pem -in $< -text -noout
 leaf%.chain: leaf%.cert int-ca.cert
