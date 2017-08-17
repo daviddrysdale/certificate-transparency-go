@@ -106,6 +106,7 @@ func TestInProcessCTIntegration(t *testing.T) {
 			RootsPemFile: []string{rootsPEMFile},
 			PublicKey:    pubKey,
 			PrivateKey:   privKey,
+			CrlSupport:   true,
 		},
 		{
 			Prefix:       "porthos",

@@ -107,6 +107,8 @@ type testInfo struct {
 	metricsServers string
 	stats          *logStats
 	pool           ClientPool
+	testdir        string
+	mmd            time.Duration
 }
 
 func (t *testInfo) checkStats() error {
@@ -118,12 +120,12 @@ func (t *testInfo) client() *client.LogClient {
 }
 
 // awaitTreeSize loops until the an STH is retrieved that is the specified size (or larger, if exact is false).
-func (t *testInfo) awaitTreeSize(ctx context.Context, size uint64, exact bool, mmd time.Duration) (*ct.SignedTreeHead, error) {
+func (t *testInfo) awaitTreeSize(ctx context.Context, size uint64, exact bool) (*ct.SignedTreeHead, error) {
 	var sth *ct.SignedTreeHead
-	deadline := time.Now().Add(mmd)
+	deadline := time.Now().Add(t.mmd)
 	for sth == nil || sth.TreeSize < size {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("deadline for STH inclusion expired (MMD=%v)", mmd)
+			return nil, fmt.Errorf("deadline for STH inclusion expired (MMD=%v)", t.mmd)
 		}
 		time.Sleep(200 * time.Millisecond)
 		var err error
@@ -141,7 +143,7 @@ func (t *testInfo) awaitTreeSize(ctx context.Context, size uint64, exact bool, m
 	return sth, nil
 }
 
-// checkInclusionOf checks that a given certificate chain and assocated SCT are included
+// checkInclusionOf checks that a given certificate chain and associated SCT are included
 // under a signed tree head.
 func (t *testInfo) checkInclusionOf(ctx context.Context, chain []ct.ASN1Cert, sct *ct.SignedCertificateTimestamp, sth *ct.SignedTreeHead) error {
 	// Calculate leaf hash =  SHA256(0x00 | tls-encode(MerkleTreeLeaf))
@@ -207,6 +209,28 @@ func (t *testInfo) checkInclusionOfPreCert(ctx context.Context, tbs []byte, issu
 	return nil
 }
 
+// checkInclusionOfCRL checks that a given CRL and associated SCT are included
+// under a signed tree head.
+func (t *testInfo) checkInclusionOfCRL(ctx context.Context, crl ct.ASN1CRL, sct *ct.SignedCertificateTimestamp, sth *ct.SignedTreeHead) error {
+	// Calculate leaf hash =  SHA256(0x00 | tls-encode(MerkleTreeLeaf))
+	leaf := ct.MerkleTreeLeafFromRawCRL(crl, sct.Timestamp)
+	leafData, err := tls.Marshal(*leaf)
+	if err != nil {
+		return fmt.Errorf("tls.Marshal(leaf[%d])=(nil,%v); want (_,nil)", 0, err)
+	}
+	leafHash := sha256.Sum256(append([]byte{merkletree.LeafPrefix}, leafData...))
+	rsp, err := t.client().GetProofByHash(ctx, leafHash[:], sth.TreeSize)
+	t.stats.done(ctfe.GetProofByHashName, 200)
+	if err != nil {
+		return fmt.Errorf("got GetProofByHash(sct[%d],size=%d)=(nil,%v); want (_,nil)", 0, sth.TreeSize, err)
+	}
+	fmt.Printf("%s: Inclusion proof leaf %d @ %d -> root %d = %x\n", t.prefix, rsp.LeafIndex, sct.Timestamp, sth.TreeSize, rsp.AuditPath)
+	if err := Verifier.VerifyInclusionProof(rsp.LeafIndex, int64(sth.TreeSize), rsp.AuditPath, sth.SHA256RootHash[:], leafData); err != nil {
+		return fmt.Errorf("got VerifyInclusionProof(%d, %d,...)=%v", 0, sth.TreeSize, err)
+	}
+	return nil
+}
+
 // checkPreCertEntry retrieves a pre-cert from a known index and checks it.
 func (t *testInfo) checkPreCertEntry(ctx context.Context, precertIndex int64, tbs []byte) error {
 	precertEntries, err := t.client().GetEntries(ctx, precertIndex, precertIndex)
@@ -250,6 +274,8 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 		metricsServers: metricsServers,
 		stats:          stats,
 		pool:           pool,
+		mmd:            mmd,
+		testdir:        testdir,
 	}
 
 	if err := t.checkStats(); err != nil {
@@ -283,7 +309,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 	// Stage 2: add a single cert (the intermediate CA), get an SCT.
 	var scts [21]*ct.SignedCertificateTimestamp // 0=int-ca, 1-20=leaves
 	var chain [21][]ct.ASN1Cert
-	chain[0], err = GetChain(testdir, "int-ca.cert")
+	chain[0], err = GetChain(t.testdir, "int-ca.cert")
 	if err != nil {
 		return fmt.Errorf("failed to load certificate: %v", err)
 	}
@@ -296,7 +322,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 	fmt.Printf("%s: Uploaded int-ca.cert to %v log, got SCT(time=%q)\n", t.prefix, scts[0].SCTVersion, timeFromMS(scts[0].Timestamp))
 
 	// Keep getting the STH until tree size becomes 1 and check the cert is included.
-	sth1, err := t.awaitTreeSize(ctx, 1, true, mmd)
+	sth1, err := t.awaitTreeSize(ctx, 1, true)
 	if err != nil {
 		return fmt.Errorf("AwaitTreeSize(1)=(nil,%v); want (_,nil)", err)
 	}
@@ -318,7 +344,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 	}
 
 	// Stage 3: add a second cert, wait for tree size = 2
-	chain[1], err = GetChain(testdir, "leaf01.chain")
+	chain[1], err = GetChain(t.testdir, "leaf01.chain")
 	if err != nil {
 		return fmt.Errorf("failed to load certificate: %v", err)
 	}
@@ -328,7 +354,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 		return fmt.Errorf("got AddChain(leaf01)=(nil,%v); want (_,nil)", err)
 	}
 	fmt.Printf("%s: Uploaded cert01.chain to %v log, got SCT(time=%q)\n", t.prefix, scts[1].SCTVersion, timeFromMS(scts[1].Timestamp))
-	sth2, err := t.awaitTreeSize(ctx, 2, true, mmd)
+	sth2, err := t.awaitTreeSize(ctx, 2, true)
 	if err != nil {
 		return fmt.Errorf("failed to get STH for size=1: %v", err)
 	}
@@ -375,7 +401,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 	count := atLeast + rand.Intn(20-atLeast)
 	for i := 2; i <= count; i++ {
 		filename := fmt.Sprintf("leaf%02d.chain", i)
-		chain[i], err = GetChain(testdir, filename)
+		chain[i], err = GetChain(t.testdir, filename)
 		if err != nil {
 			return fmt.Errorf("failed to load certificate: %v", err)
 		}
@@ -392,7 +418,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 
 	// Stage 6: keep getting the STH until tree size becomes 1 + N (allows for int-ca.cert).
 	treeSize := 1 + count
-	sthN, err := t.awaitTreeSize(ctx, uint64(treeSize), true, mmd)
+	sthN, err := t.awaitTreeSize(ctx, uint64(treeSize), true)
 	if err != nil {
 		return fmt.Errorf("AwaitTreeSize(%d)=(nil,%v); want (_,nil)", treeSize, err)
 	}
@@ -477,7 +503,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 	}
 
 	// Stage 12: build and add a pre-certificate.
-	signer, err := MakeSigner(testdir)
+	signer, err := MakeSigner(t.testdir)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve signer for re-signing: %v", err)
 	}
@@ -496,7 +522,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 	}
 	fmt.Printf("%s: Uploaded precert to %v log, got SCT(time=%q)\n", t.prefix, precertSCT.SCTVersion, timeFromMS(precertSCT.Timestamp))
 	treeSize++
-	sthN1, err := t.awaitTreeSize(ctx, uint64(treeSize), true, mmd)
+	sthN1, err := t.awaitTreeSize(ctx, uint64(treeSize), true)
 	if err != nil {
 		return fmt.Errorf("AwaitTreeSize(%d)=(nil,%v); want (_,nil)", treeSize, err)
 	}
@@ -540,7 +566,7 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 	}
 	fmt.Printf("%s: Uploaded pre-issued precert to %v log, got SCT(time=%q)\n", t.prefix, precertSCT.SCTVersion, timeFromMS(precertSCT.Timestamp))
 	treeSize++
-	sthN2, err := t.awaitTreeSize(ctx, uint64(treeSize), true, mmd)
+	sthN2, err := t.awaitTreeSize(ctx, uint64(treeSize), true)
 	if err != nil {
 		return fmt.Errorf("AwaitTreeSize(%d)=(nil,%v); want (_,nil)", treeSize, err)
 	}
@@ -560,6 +586,67 @@ func RunCTIntegrationForLog(cfg *configpb.LogConfig, servers, metricsServers, te
 	// Final stats check.
 	if err := t.checkStats(); err != nil {
 		return fmt.Errorf("unexpected stats check: %v", err)
+	}
+
+	if t.cfg.CrlSupport {
+		return t.RunCRLIntegrationForLog(ctx)
+	}
+	return nil
+}
+
+// RunCRLIntegrationForLog tests add-crl functionality for the log.
+func (t *testInfo) RunCRLIntegrationForLog(ctx context.Context) error {
+	fmt.Printf("%s: ==== run add-crl tests =====\n", t.prefix)
+	chain, err := GetChain(t.testdir, "int-ca.cert")
+	if err != nil {
+		return fmt.Errorf("failed to load certificate: %v", err)
+	}
+	crldata, err := ioutil.ReadFile(filepath.Join(t.testdir, "int-ca-crl.pem"))
+	if err != nil {
+		return fmt.Errorf("failed to load crl: %v", err)
+	}
+	crl, err := x509.ParseCertificateList(crldata)
+	if err != nil {
+		return fmt.Errorf("failed to parse crl: %v", err)
+	}
+
+	// Stage 1: get the current STH
+	sth0, err := t.client().GetSTH(ctx)
+	t.stats.done(ctfe.GetSTHName, 200)
+	if err != nil {
+		return fmt.Errorf("got GetSTH()=(nil,%v); want (_,nil)", err)
+	}
+	fmt.Printf("%s: starting from STH(time=%q, size=%d)\n", t.prefix, timeFromMS(sth0.Timestamp), sth0.TreeSize)
+
+	// Stage 2: add a single CRL, get an SCT.
+	sct, err := t.client().AddCRL(ctx, ct.ASN1CRL{Data: crl.Raw}, chain)
+	t.stats.done(ctfe.AddCRLName, 200)
+	if err != nil {
+		return fmt.Errorf("got AddCRL(int-ca-crl.pem)=(nil,%v); want (_,nil)", err)
+	}
+	// Display the SCT
+	fmt.Printf("%s: Uploaded int-ca-crl.pem to %v log, got SCT(time=%q)\n", t.prefix, sct.SCTVersion, timeFromMS(sct.Timestamp))
+
+	// Keep getting the STH until tree size becomes 1 and check the cert is included.
+	sth1, err := t.awaitTreeSize(ctx, sth0.TreeSize+1, true)
+	if err != nil {
+		return fmt.Errorf("AwaitTreeSize(N+1)=(nil,%v); want (_,nil)", err)
+	}
+	fmt.Printf("%s: Got STH(time=%q, size=%d): roothash=%x\n", t.prefix, timeFromMS(sth1.Timestamp), sth1.TreeSize, sth1.SHA256RootHash)
+	if err := t.checkStats(); err != nil {
+		return fmt.Errorf("unexpected stats check: %v", err)
+	}
+	t.checkInclusionOfCRL(ctx, ct.ASN1CRL{Data: crl.Raw}, sct, sth1)
+
+	// Stage 3: add the same cert, expect an SCT with the same timestamp as before.
+	var sctCopy *ct.SignedCertificateTimestamp
+	sctCopy, err = t.client().AddCRL(ctx, ct.ASN1CRL{Data: crl.Raw}, chain)
+	if err != nil {
+		return fmt.Errorf("got re-AddChain(int-ca-crl.pem)=(nil,%v); want (_,nil)", err)
+	}
+	t.stats.done(ctfe.AddCRLName, 200)
+	if sct.Timestamp != sctCopy.Timestamp {
+		return fmt.Errorf("got sct @ %v; want @ %v", sctCopy, sct)
 	}
 	return nil
 }
