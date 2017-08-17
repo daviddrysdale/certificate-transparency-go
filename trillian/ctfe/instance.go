@@ -80,6 +80,9 @@ func SetUpInstance(ctx context.Context, client trillian.TrillianLogClient, cfg *
 	if cfg.PrivateKey == nil {
 		return nil, errors.New("need to specify PrivateKey")
 	}
+	if cfg.NoCertSupport && !cfg.CrlSupport {
+		return nil, errors.New("need to support certs or CRLs (or both)")
+	}
 
 	// Load the trusted roots
 	roots := NewPEMCertPool()
@@ -140,7 +143,7 @@ func SetUpInstance(ctx context.Context, client trillian.TrillianLogClient, cfg *
 		extKeyUsages:  keyUsages,
 	}
 	// Create and register the handlers using the RPC client we just set up
-	logCtx := NewLogContext(cfg.LogId, cfg.Prefix, validationOpts, client, signer, deadline, new(util.SystemTimeSource), mf)
+	logCtx := NewLogContext(cfg, validationOpts, client, signer, deadline, new(util.SystemTimeSource), mf)
 
 	handlers := logCtx.Handlers(cfg.Prefix)
 	return &handlers, nil

@@ -66,6 +66,10 @@ message LogConfig {
   // backend_name if set indicates which backend serves this log. The name must be
   // one of those defined in the LogBackendSet.
   string log_backend_name = 11;
+  // no_cert_support controls whether certificates are accepted by the log.
+  bool no_cert_support = 12;
+  // crl_support controls whether CRLs are accepted by the log.
+  bool crl_support = 13;
 }
 
 // LogMultiConfig wraps up a LogBackendSet and corresponding LogConfigSet so

@@ -99,6 +99,30 @@ func (c *LogClient) AddPreChain(ctx context.Context, chain []ct.ASN1Cert) (*ct.S
 	return c.addChainWithRetry(ctx, ct.PrecertLogEntryType, ct.AddPreChainPath, chain)
 }
 
+// AddCRL add the (DER-encoded) certificate revocation list to the log.
+func (c *LogClient) AddCRL(ctx context.Context, crl ct.ASN1CRL, chain []ct.ASN1Cert) (*ct.SignedCertificateTimestamp, error) {
+	req := ct.AddCRLRequest{CRL: crl.Data}
+	for _, link := range chain {
+		req.Chain = append(req.Chain, link.Data)
+	}
+	var resp ct.AddChainResponse
+	httpRsp, body, err := c.PostAndParseWithRetry(ctx, ct.AddCRLPath, &req, &resp)
+	if err != nil {
+		if httpRsp != nil {
+			return nil, RspError{Err: err, StatusCode: httpRsp.StatusCode, Body: body}
+		}
+		return nil, err
+	}
+	sct, err := sctFromAddChainResponse(&resp, httpRsp, body)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.VerifySCTSignatureForCRL(*sct, crl); err != nil {
+		return nil, RspError{Err: err, StatusCode: httpRsp.StatusCode, Body: body}
+	}
+	return sct, nil
+}
+
 // AddJSON submits arbitrary data to to XJSON server.
 func (c *LogClient) AddJSON(ctx context.Context, data interface{}) (*ct.SignedCertificateTimestamp, error) {
 	req := ct.AddJSONRequest{Data: data}
@@ -198,6 +222,17 @@ func (c *LogClient) VerifySCTSignature(sct ct.SignedCertificateTimestamp, ctype 
 	if err != nil {
 		return fmt.Errorf("failed to build MerkleTreeLeaf: %v", err)
 	}
+	entry := ct.LogEntry{Leaf: *leaf}
+	return c.Verifier.VerifySCTSignature(sct, entry)
+}
+
+// VerifySCTSignatureForCRL checks the signature in sct for the given crl, with associated certificate chain.
+func (c *LogClient) VerifySCTSignatureForCRL(sct ct.SignedCertificateTimestamp, crl ct.ASN1CRL) error {
+	if c.Verifier == nil {
+		// Can't verify signatures without a verifier
+		return nil
+	}
+	leaf := ct.MerkleTreeLeafFromRawCRL(crl, sct.Timestamp)
 	entry := ct.LogEntry{Leaf: *leaf}
 	return c.Verifier.VerifySCTSignature(sct, entry)
 }

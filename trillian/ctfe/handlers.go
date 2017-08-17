@@ -32,6 +32,7 @@ import (
 	"github.com/golang/glog"
 	ct "github.com/google/certificate-transparency-go"
 	"github.com/google/certificate-transparency-go/tls"
+	"github.com/google/certificate-transparency-go/trillian/ctfe/configpb"
 	"github.com/google/certificate-transparency-go/trillian/util"
 	"github.com/google/certificate-transparency-go/x509"
 	"github.com/google/trillian"
@@ -200,31 +201,25 @@ type CertValidationOpts struct {
 
 // LogContext holds information for a specific log instance.
 type LogContext struct {
-	// LogPrefix is a pre-formatted string identifying the log for diagnostics
-	LogPrefix string
-	// TimeSource is a util.TimeSource that can be injected for testing
-	TimeSource util.TimeSource
+	LogPrefix  string
+	TimeSource util.TimeSource // Allows injection for testing
 
-	// logID is the tree ID that identifies this log in node storage
-	logID int64
-	// urlPrefix is the prefix for URLs for this log
-	urlPrefix string
-	// validationOpts contains the certificate chain validation parameters
+	logID          int64
+	urlPrefix      string
 	validationOpts CertValidationOpts
-	// rpcClient is the client used to communicate with the trillian backend
-	rpcClient trillian.TrillianLogClient
-	// signer signs objects
-	signer *crypto.Signer
-	// rpcDeadline is the deadline that will be set on all backend RPC requests
-	rpcDeadline time.Duration
+	rpcClient      trillian.TrillianLogClient
+	signer         *crypto.Signer
+	rpcDeadline    time.Duration
+	noCertSupport  bool
+	crlSupport     bool
 }
 
 // NewLogContext creates a new instance of LogContext.
-func NewLogContext(logID int64, prefix string, validationOpts CertValidationOpts, rpcClient trillian.TrillianLogClient, signer *crypto.Signer, rpcDeadline time.Duration, timeSource util.TimeSource, mf monitoring.MetricFactory) *LogContext {
+func NewLogContext(cfg *configpb.LogConfig, validationOpts CertValidationOpts, rpcClient trillian.TrillianLogClient, signer *crypto.Signer, rpcDeadline time.Duration, timeSource util.TimeSource, mf monitoring.MetricFactory) *LogContext {
 	ctx := &LogContext{
-		logID:          logID,
-		urlPrefix:      prefix,
-		LogPrefix:      fmt.Sprintf("%s{%d}", prefix, logID),
+		logID:          cfg.LogId,
+		urlPrefix:      cfg.Prefix,
+		LogPrefix:      fmt.Sprintf("%s{%d}", cfg.Prefix, cfg.LogId),
 		rpcClient:      rpcClient,
 		signer:         signer,
 		rpcDeadline:    rpcDeadline,
@@ -232,7 +227,7 @@ func NewLogContext(logID int64, prefix string, validationOpts CertValidationOpts
 		validationOpts: validationOpts,
 	}
 	once.Do(func() { setupMetrics(mf) })
-	knownLogs.Set(1.0, strconv.FormatInt(logID, 10))
+	knownLogs.Set(1.0, strconv.FormatInt(cfg.LogId, 10))
 
 	return ctx
 }
