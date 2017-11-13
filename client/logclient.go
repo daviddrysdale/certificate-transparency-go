@@ -79,26 +79,9 @@ func (c *LogClient) addChainWithRetry(ctx context.Context, ctype ct.LogEntryType
 		}
 		return nil, err
 	}
-
-	var ds ct.DigitallySigned
-	if rest, err := tls.Unmarshal(resp.Signature, &ds); err != nil {
-		return nil, RspError{Err: err, StatusCode: httpRsp.StatusCode, Body: body}
-	} else if len(rest) > 0 {
-		return nil, RspError{
-			Err:        fmt.Errorf("trailing data (%d bytes) after DigitallySigned", len(rest)),
-			StatusCode: httpRsp.StatusCode,
-			Body:       body,
-		}
-	}
-
-	var logID ct.LogID
-	copy(logID.KeyID[:], resp.ID)
-	sct := &ct.SignedCertificateTimestamp{
-		SCTVersion: resp.SCTVersion,
-		LogID:      logID,
-		Timestamp:  resp.Timestamp,
-		Extensions: ct.CTExtensions(resp.Extensions),
-		Signature:  ds,
+	sct, err := sctFromAddChainResponse(&resp, httpRsp, body)
+	if err != nil {
+		return nil, err
 	}
 	if err := c.VerifySCTSignature(*sct, ctype, chain); err != nil {
 		return nil, RspError{Err: err, StatusCode: httpRsp.StatusCode, Body: body}
@@ -106,12 +89,12 @@ func (c *LogClient) addChainWithRetry(ctx context.Context, ctype ct.LogEntryType
 	return sct, nil
 }
 
-// AddChain adds the (DER represented) X509 |chain| to the log.
+// AddChain adds the (DER-encoded) X509 chain to the log.
 func (c *LogClient) AddChain(ctx context.Context, chain []ct.ASN1Cert) (*ct.SignedCertificateTimestamp, error) {
 	return c.addChainWithRetry(ctx, ct.X509LogEntryType, ct.AddChainPath, chain)
 }
 
-// AddPreChain adds the (DER represented) Precertificate |chain| to the log.
+// AddPreChain adds the (DER-encoded) precertificate chain to the log.
 func (c *LogClient) AddPreChain(ctx context.Context, chain []ct.ASN1Cert) (*ct.SignedCertificateTimestamp, error) {
 	return c.addChainWithRetry(ctx, ct.PrecertLogEntryType, ct.AddPreChainPath, chain)
 }
@@ -127,6 +110,10 @@ func (c *LogClient) AddJSON(ctx context.Context, data interface{}) (*ct.SignedCe
 		}
 		return nil, err
 	}
+	return sctFromAddChainResponse(&resp, httpRsp, body)
+}
+
+func sctFromAddChainResponse(resp *ct.AddChainResponse, httpRsp *http.Response, body []byte) (*ct.SignedCertificateTimestamp, error) {
 	var ds ct.DigitallySigned
 	if rest, err := tls.Unmarshal(resp.Signature, &ds); err != nil {
 		return nil, RspError{Err: err, StatusCode: httpRsp.StatusCode, Body: body}
