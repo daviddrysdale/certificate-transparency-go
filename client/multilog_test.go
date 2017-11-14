@@ -354,7 +354,7 @@ func TestTemporalAddChain(t *testing.T) {
 		t.Fatalf("Failed to parse certificate from PEM: %v", err)
 	}
 	certChain := []ct.ASN1Cert{{Data: cert.Raw}}
-	precert, err := x509util.CertificateFromPEM(testdata.TestPreCertPEM)
+	precert, err := x509util.PreCertificateFromPEM(testdata.TestPreCertPEM)
 	if err != nil {
 		t.Fatalf("Failed to parse pre-certificate from PEM: %v", err)
 	}

@@ -171,7 +171,11 @@ func (tlc *TemporalLogClient) addChain(ctx context.Context, ctype ct.LogEntryTyp
 	if len(chain) == 0 {
 		return nil, errors.New("missing chain")
 	}
-	cert, err := x509.ParseCertificate(chain[0].Data)
+	parseFn := x509.ParseCertificate
+	if ctype == ct.PrecertLogEntryType {
+		parseFn = x509.ParsePreCertificate
+	}
+	cert, err := parseFn(chain[0].Data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse initial chain entry: %v", err)
 	}

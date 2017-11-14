@@ -478,7 +478,7 @@ func TestAddPreChain(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	cert, err := x509util.CertificateFromPEM(testdata.TestPreCertPEM)
+	cert, err := x509util.PreCertificateFromPEM(testdata.TestPreCertPEM)
 	if err != nil {
 		t.Fatalf("Failed to parse pre-certificate from PEM: %v", err)
 	}

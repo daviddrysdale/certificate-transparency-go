@@ -609,3 +609,13 @@ func CertificateFromPEM(pemBytes string) (*x509.Certificate, error) {
 	}
 	return x509.ParseCertificate(block.Bytes)
 }
+
+// PreCertificateFromPEM takes a string representing a pre-certificate embedded
+// in a PEM format certificate and returns the corresponding x509.Certificate object.
+func PreCertificateFromPEM(pemBytes string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(pemBytes))
+	if block == nil {
+		return nil, errors.New("failed to decode PEM")
+	}
+	return x509.ParsePreCertificate(block.Bytes)
+}
