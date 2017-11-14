@@ -29,6 +29,7 @@ import (
 	"github.com/google/certificate-transparency-go/client"
 	"github.com/google/certificate-transparency-go/jsonclient"
 	"github.com/google/certificate-transparency-go/scanner"
+	"github.com/google/certificate-transparency-go/x509"
 )
 
 const (
@@ -41,12 +42,15 @@ var matchSubjectRegex = flag.String("match_subject_regex", ".*", "Regex to match
 var matchIssuerRegex = flag.String("match_issuer_regex", "", "Regex to match in issuer CN")
 var precertsOnly = flag.Bool("precerts_only", false, "Only match precerts")
 var serialNumber = flag.String("serial_number", "", "Serial number of certificate of interest")
+var parseErrors = flag.Bool("parse_errors", false, "Only match certificates with parse errors")
+var validateErrors = flag.Bool("validate_errors", false, "Only match certificates with validation errors")
 var batchSize = flag.Int("batch_size", 1000, "Max number of entries to request at per call to get-entries")
 var numWorkers = flag.Int("num_workers", 2, "Number of concurrent matchers")
 var parallelFetch = flag.Int("parallel_fetch", 2, "Number of concurrent GetEntries fetches")
 var startIndex = flag.Int64("start_index", 0, "Log index to start scanning at")
 var quiet = flag.Bool("quiet", false, "Don't print out extra logging messages, only matches.")
 var printChains = flag.Bool("print_chains", false, "If true prints the whole chain rather than a summary")
+var ignore = flag.String("ignore", "", "Comma-separated list of error IDs to ignore")
 
 // Prints out a short bit of info about |cert|, found at |index| in the
 // specified log
@@ -89,7 +93,15 @@ func createRegexes(regexValue string) (*regexp.Regexp, *regexp.Regexp) {
 	return certRegex, precertRegex
 }
 
-func createMatcherFromFlags() (scanner.Matcher, error) {
+func createMatcherFromFlags(logClient *client.LogClient) (interface{}, error) {
+	if *parseErrors {
+		return scanner.MatchParseErrs{x509.ErrorFilter(*ignore)}, nil
+	}
+	if *validateErrors {
+		matcher := scanner.MatchValidationFailures{}
+		matcher.PopulateRoots(context.TODO(), logClient)
+		return matcher, nil
+	}
 	if *matchIssuerRegex != "" {
 		certRegex, precertRegex := createRegexes(*matchIssuerRegex)
 		return scanner.MatchIssuerRegex{
@@ -128,7 +140,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	matcher, err := createMatcherFromFlags()
+	matcher, err := createMatcherFromFlags(logClient)
 	if err != nil {
 		log.Fatal(err)
 	}
