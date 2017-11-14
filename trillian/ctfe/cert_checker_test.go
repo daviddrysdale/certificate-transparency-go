@@ -295,8 +295,8 @@ func pemToCert(t *testing.T, pemData string) *x509.Certificate {
 
 	cert, err := x509.ParseCertificate(bytes.Bytes)
 	if err != nil {
-		_, ok := err.(x509.NonFatalErrors)
-		if !ok {
+		errs, ok := err.(*x509.Errors)
+		if !ok || errs.Fatal() {
 			t.Fatal(err)
 			return nil
 		}

@@ -84,9 +84,9 @@ func TestBuildV1MerkleTreeLeafForCert(t *testing.T) {
 
 func TestSignV1SCTForPrecertificate(t *testing.T) {
 	cert, err := x509util.CertificateFromPEM(testonly.PrecertPEMValid)
-	_, ok := err.(x509.NonFatalErrors)
+	errs, ok := err.(*x509.Errors)
 
-	if err != nil && !ok {
+	if err != nil && (!ok || errs.Fatal()) {
 		t.Fatalf("failed to set up test precert: %v", err)
 	}
 
