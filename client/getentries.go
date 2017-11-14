@@ -66,8 +66,10 @@ func (c *LogClient) GetEntries(ctx context.Context, start, end int64) ([]ct.LogE
 	for i, entry := range resp.Entries {
 		index := start + int64(i)
 		logEntry, err := ct.LogEntryFromLeaf(index, &entry)
-		if _, ok := err.(x509.NonFatalErrors); !ok && err != nil {
-			return nil, err
+		if err != nil {
+			if errs, ok := err.(*x509.Errors); !ok || errs.Fatal() {
+				return nil, err
+			}
 		}
 		entries[i] = *logEntry
 	}
