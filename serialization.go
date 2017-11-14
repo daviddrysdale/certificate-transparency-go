@@ -126,7 +126,11 @@ func MerkleTreeLeafFromRawChain(rawChain []ASN1Cert, etype LogEntryType, timesta
 	}
 	chain := make([]*x509.Certificate, count)
 	for i := range chain {
-		cert, err := x509.ParseCertificate(rawChain[i].Data)
+		parseFn := x509.ParseCertificate
+		if i == 0 && etype == PrecertLogEntryType {
+			parseFn = x509.ParsePreCertificate
+		}
+		cert, err := parseFn(rawChain[i].Data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse chain[%d] cert: %v", i, err)
 		}
