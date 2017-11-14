@@ -71,9 +71,10 @@ func (p *PEMCertPool) AppendCertsFromPEM(pemCerts []byte) (ok bool) {
 			continue
 		}
 
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			glog.Warningf("error parsing PEM certificate: %v", err)
+		cert, errs := x509.ParseCertificateLax(block.Bytes)
+		errs = errs.Filter([]x509.ErrorID{x509.ErrCTPoisonExtensionPresent})
+		if errs.Fatal() {
+			glog.Warningf("error parsing PEM certificate: %v", errs)
 			return false
 		}
 

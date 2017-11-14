@@ -655,9 +655,10 @@ func buildNewPrecertData(cert, issuer *x509.Certificate, signer crypto.Signer) (
 // buildLeafTBS builds the raw pre-cert data (a DER-encoded TBSCertificate) that is included
 // in the log.
 func buildLeafTBS(precertData []byte, preIssuer *x509.Certificate) ([]byte, error) {
-	reparsed, err := x509.ParseCertificate(precertData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to re-parse created precertificate: %v", err)
+	reparsed, errs := x509.ParseCertificateLax(precertData)
+	errs = errs.Filter([]x509.ErrorID{x509.ErrCTPoisonExtensionPresent})
+	if errs.Fatal() {
+		return nil, fmt.Errorf("failed to re-parse created precertificate: %v", errs)
 	}
 	return x509.BuildPrecertTBS(reparsed.RawTBSCertificate, preIssuer)
 }
@@ -715,7 +716,7 @@ func makePreIssuerPrecertChain(chain []ct.ASN1Cert, issuer *x509.Certificate, si
 		return nil, nil, fmt.Errorf("failed to create certificate: %v", err)
 	}
 
-	if err := verifyChain(prechain); err != nil {
+	if err := verifyChain(prechain, true); err != nil {
 		return nil, nil, fmt.Errorf("failed to verify just-created prechain: %v", err)
 	}
 
@@ -751,10 +752,14 @@ func makeCertChain(chain []ct.ASN1Cert, cert, issuer *x509.Certificate, signer c
 }
 
 // verifyChain checks that a chain of certificates validates locally.
-func verifyChain(rawChain []ct.ASN1Cert) error {
+func verifyChain(rawChain []ct.ASN1Cert, precert bool) error {
 	chain := make([]*x509.Certificate, 0, len(rawChain))
 	for i, c := range rawChain {
-		cert, err := x509.ParseCertificate(c.Data)
+		parseFn := x509.ParseCertificate
+		if precert {
+			parseFn = x509.ParsePreCertificate
+		}
+		cert, err := parseFn(c.Data)
 		if err != nil {
 			return fmt.Errorf("failed to parse rawChain[%d]: %v", i, err)
 		}

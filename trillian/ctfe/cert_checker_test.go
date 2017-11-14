@@ -50,28 +50,28 @@ func TestIsPrecertificate(t *testing.T) {
 	}{
 		{
 			desc:        "valid-precert",
-			cert:        pemToCert(t, testonly.PrecertPEMValid),
+			cert:        pemToCert(t, testonly.PrecertPEMValid, true),
 			wantPrecert: true,
 		},
 		{
 			desc:        "valid-cert",
-			cert:        pemToCert(t, testonly.CACertPEM),
+			cert:        pemToCert(t, testonly.CACertPEM, false),
 			wantPrecert: false,
 		},
 		{
 			desc:        "remove-exts-from-precert",
-			cert:        wipeExtensions(pemToCert(t, testonly.PrecertPEMValid)),
+			cert:        wipeExtensions(pemToCert(t, testonly.PrecertPEMValid, true)),
 			wantPrecert: false,
 		},
 		{
 			desc:        "poison-non-critical",
-			cert:        makePoisonNonCritical(pemToCert(t, testonly.PrecertPEMValid)),
+			cert:        makePoisonNonCritical(pemToCert(t, testonly.PrecertPEMValid, true)),
 			wantPrecert: false,
 			wantErr:     true,
 		},
 		{
 			desc:        "poison-non-null",
-			cert:        makePoisonNonNull(pemToCert(t, testonly.PrecertPEMValid)),
+			cert:        makePoisonNonNull(pemToCert(t, testonly.PrecertPEMValid, true)),
 			wantPrecert: false,
 			wantErr:     true,
 		},
@@ -137,7 +137,7 @@ func TestValidateChain(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		gotPath, err := ValidateChain(test.chain, validateOpts)
+		gotPath, err := ValidateChain(test.chain, validateOpts, false)
 		if err != nil {
 			if !test.wantErr {
 				t.Errorf("ValidateChain(%v)=%v,%v; want _,nil", test.desc, gotPath, err)
@@ -197,7 +197,7 @@ func TestCA(t *testing.T) {
 	}
 	for _, test := range tests {
 		validateOpts.acceptOnlyCA = test.caOnly
-		gotPath, err := ValidateChain(test.chain, validateOpts)
+		gotPath, err := ValidateChain(test.chain, validateOpts, false)
 		if err != nil {
 			if !test.wantErr {
 				t.Errorf("ValidateChain(%v)=%v,%v; want _,nil", test.desc, gotPath, err)
@@ -260,7 +260,7 @@ func TestNotAfterRange(t *testing.T) {
 		if !test.notAfterLimit.IsZero() {
 			validateOpts.notAfterLimit = &test.notAfterLimit
 		}
-		gotPath, err := ValidateChain(test.chain, validateOpts)
+		gotPath, err := ValidateChain(test.chain, validateOpts, false)
 		if err != nil {
 			if !test.wantErr {
 				t.Errorf("ValidateChain(%v)=%v,%v; want _,nil", test.desc, gotPath, err)
@@ -279,13 +279,13 @@ func pemsToDERChain(t *testing.T, pemCerts []string) [][]byte {
 	t.Helper()
 	chain := make([][]byte, 0, len(pemCerts))
 	for _, pemCert := range pemCerts {
-		cert := pemToCert(t, pemCert)
+		cert := pemToCert(t, pemCert, false)
 		chain = append(chain, cert.Raw)
 	}
 	return chain
 }
 
-func pemToCert(t *testing.T, pemData string) *x509.Certificate {
+func pemToCert(t *testing.T, pemData string, precert bool) *x509.Certificate {
 	t.Helper()
 	bytes, rest := pem.Decode([]byte(pemData))
 	if len(rest) > 0 {
@@ -293,7 +293,11 @@ func pemToCert(t *testing.T, pemData string) *x509.Certificate {
 		return nil
 	}
 
-	cert, err := x509.ParseCertificate(bytes.Bytes)
+	parseFn := x509.ParseCertificate
+	if precert {
+		parseFn = x509.ParsePreCertificate
+	}
+	cert, err := parseFn(bytes.Bytes)
 	if err != nil {
 		errs, ok := err.(*x509.Errors)
 		if !ok || errs.Fatal() {

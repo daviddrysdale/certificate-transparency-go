@@ -51,18 +51,18 @@ func IsPrecertificate(cert *x509.Certificate) (bool, error) {
 // end entity certificate in the chain to a trusted root cert, possibly using the intermediates
 // supplied in the chain. Then applies the RFC requirement that the path must involve all
 // the submitted chain in the order of submission.
-func ValidateChain(rawChain [][]byte, validationOpts CertValidationOpts) ([]*x509.Certificate, error) {
+func ValidateChain(rawChain [][]byte, validationOpts CertValidationOpts, precert bool) ([]*x509.Certificate, error) {
 	// First make sure the certs parse as X.509
 	chain := make([]*x509.Certificate, 0, len(rawChain))
 	intermediatePool := NewPEMCertPool()
 
 	for i, certBytes := range rawChain {
-		cert, err := x509.ParseCertificate(certBytes)
-		if err != nil {
-			errs, ok := err.(*x509.Errors)
-			if !ok || errs.Fatal() {
-				return nil, err
-			}
+		cert, errs := x509.ParseCertificateLax(certBytes)
+		if precert {
+			errs = errs.Filter([]x509.ErrorID{x509.ErrCTPoisonExtensionPresent})
+		}
+		if errs.Fatal() {
+			return nil, &errs
 		}
 
 		chain = append(chain, cert)

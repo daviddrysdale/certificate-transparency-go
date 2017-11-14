@@ -83,7 +83,7 @@ func TestBuildV1MerkleTreeLeafForCert(t *testing.T) {
 }
 
 func TestSignV1SCTForPrecertificate(t *testing.T) {
-	cert, err := x509util.CertificateFromPEM(testonly.PrecertPEMValid)
+	cert, err := x509util.PreCertificateFromPEM(testonly.PrecertPEMValid)
 	errs, ok := err.(*x509.Errors)
 
 	if err != nil && (!ok || errs.Fatal()) {

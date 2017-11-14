@@ -686,7 +686,7 @@ func getRPCDeadlineTime(c LogContext) time.Time {
 // by fixchain (called by this code) plus the ones here to make sure that it is compliant.
 func verifyAddChain(c LogContext, req ct.AddChainRequest, w http.ResponseWriter, expectingPrecert bool) ([]*x509.Certificate, error) {
 	// We already checked that the chain is not empty so can move on to verification
-	validPath, err := ValidateChain(req.Chain, c.validationOpts)
+	validPath, err := ValidateChain(req.Chain, c.validationOpts, expectingPrecert)
 	if err != nil {
 		// We rejected it because the cert failed checks or we could not find a path to a root etc.
 		// Lots of possible causes for errors
