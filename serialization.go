@@ -224,8 +224,10 @@ func LogEntryFromLeaf(index int64, leafEntry *LeafEntry) (*LogEntry, error) {
 		}
 		entry.Chain = certChain.Entries
 		entry.X509Cert, err = leaf.X509Certificate()
-		if _, ok := err.(x509.NonFatalErrors); !ok && err != nil {
-			return nil, fmt.Errorf("failed to parse certificate in MerkleTreeLeaf for index %d: %v", index, err)
+		if err != nil {
+			if errs, ok := err.(*x509.Errors); !ok || errs.Fatal() {
+				return nil, fmt.Errorf("failed to parse certificate in MerkleTreeLeaf for index %d: %v", index, err)
+			}
 		}
 
 	case PrecertLogEntryType:
@@ -238,8 +240,10 @@ func LogEntryFromLeaf(index int64, leafEntry *LeafEntry) (*LogEntry, error) {
 		entry.Chain = precertChain.CertificateChain
 		var tbsCert *x509.Certificate
 		tbsCert, err = leaf.Precertificate()
-		if _, ok := err.(x509.NonFatalErrors); !ok && err != nil {
-			return nil, fmt.Errorf("failed to parse precertificate in MerkleTreeLeaf for index %d: %v", index, err)
+		if err != nil {
+			if errs, ok := err.(*x509.Errors); !ok || errs.Fatal() {
+				return nil, fmt.Errorf("failed to parse precertificate in MerkleTreeLeaf for index %d: %v", index, err)
+			}
 		}
 		entry.Precert = &Precertificate{
 			Submitted:      precertChain.PreCertificate,
