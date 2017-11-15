@@ -409,39 +409,101 @@ func CertificateToString(cert *x509.Certificate) string {
 	result.WriteString(fmt.Sprintf("        Subject Public Key Info:\n"))
 	result.WriteString(fmt.Sprintf("            Public Key Algorithm: %v\n", publicKeyAlgorithmToString(cert.PublicKeyAlgorithm)))
 	result.WriteString(fmt.Sprintf("%v\n", publicKeyToString(cert.PublicKeyAlgorithm, cert.PublicKey)))
+	if cert.IssuerUniqueId.BitLength > 0 {
+		result.WriteString(fmt.Sprintf("        Issuer Unique ID:\n"))
+		result.WriteString(fmt.Sprintf("            %v\n", bitStringToString(cert.IssuerUniqueId)))
+	}
+	if cert.SubjectUniqueId.BitLength > 0 {
+		result.WriteString(fmt.Sprintf("        Subject Unique ID:\n"))
+		result.WriteString(fmt.Sprintf("            %v\n", bitStringToString(cert.SubjectUniqueId)))
+	}
 
 	if len(cert.Extensions) > 0 {
 		result.WriteString(fmt.Sprintf("        X509v3 extensions:\n"))
 	}
-	var showCritical = func(critical bool) {
-		if critical {
-			result.WriteString(" critical")
-		}
-		result.WriteString("\n")
-	}
 	// First display the extensions that are already cracked out
+	showAuthKeyID(&result, cert)
+	showSubjectKeyID(&result, cert)
+	showKeyUsage(&result, cert)
+	showExtendedKeyUsage(&result, cert)
+	showBasicConstraints(&result, cert)
+	showSubjectAltName(&result, cert)
+	showNameConstraints(&result, cert)
+	showCertPolicies(&result, cert)
+	showCRLDPs(&result, cert)
+	showFreshestCRL(&result, cert)
+	showIssuerAltName(&result, cert)
+	showPolicyMappings(&result, cert)
+	showPolicyConstraints(&result, cert)
+	showInhibitAnyPolicy(&result, cert)
+	showSubjectDirectoryAttributes(&result, cert)
+	showAuthInfoAccess(&result, cert)
+	showSubjectInfoAccess(&result, cert)
+	showCTPoison(&result, cert)
+	showCTSCT(&result, cert)
+
+	for _, ext := range cert.Extensions {
+		// Skip extensions that are already cracked out
+		if OIDForStandardExtension(ext.Id) {
+			continue
+		}
+		result.WriteString(fmt.Sprintf("            %v:", ext.Id))
+		showCritical(&result, ext.Critical)
+		result.WriteString("                .....\n")
+	}
+
+	result.WriteString(fmt.Sprintf("    Signature Algorithm: %v\n", cert.SignatureAlgorithm))
+	appendHexData(&result, cert.Signature, 18, "         ")
+	result.WriteString("\n")
+
+	return result.String()
+}
+
+func showCritical(result *bytes.Buffer, critical bool) {
+	if critical {
+		result.WriteString(" critical")
+	}
+	result.WriteString("\n")
+}
+
+func showAuthKeyID(result *bytes.Buffer, cert *x509.Certificate) {
 	count, critical := OIDInExtensions(x509.OIDExtensionAuthorityKeyId, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Authority Key Identifier:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		result.WriteString(fmt.Sprintf("                keyid:%v\n", hex.EncodeToString(cert.AuthorityKeyId)))
+		if !cert.AuthorityKeyIssuer.Empty() {
+			result.WriteString(fmt.Sprintf("                %v\n", GeneralNamesToString(&cert.AuthorityKeyIssuer)))
+		}
+		if cert.AuthorityKeySerialNumber != nil {
+			result.WriteString(fmt.Sprintf("                serial:%v\n", hex.EncodeToString(cert.AuthorityKeySerialNumber.Bytes())))
+		}
 	}
-	count, critical = OIDInExtensions(x509.OIDExtensionSubjectKeyId, cert.Extensions)
+}
+
+func showSubjectKeyID(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionSubjectKeyId, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Subject Key Identifier:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		result.WriteString(fmt.Sprintf("                keyid:%v\n", hex.EncodeToString(cert.SubjectKeyId)))
 	}
-	count, critical = OIDInExtensions(x509.OIDExtensionKeyUsage, cert.Extensions)
+}
+
+func showKeyUsage(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionKeyUsage, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Key Usage:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		result.WriteString(fmt.Sprintf("                %v\n", keyUsageToString(cert.KeyUsage)))
 	}
-	count, critical = OIDInExtensions(x509.OIDExtensionExtendedKeyUsage, cert.Extensions)
+}
+
+func showExtendedKeyUsage(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionExtendedKeyUsage, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Extended Key Usage:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		var usages bytes.Buffer
 		for _, usage := range cert.ExtKeyUsage {
 			commaAppend(&usages, extKeyUsageToString(usage))
@@ -451,64 +513,64 @@ func CertificateToString(cert *x509.Certificate) string {
 		}
 		result.WriteString(fmt.Sprintf("                %v\n", usages.String()))
 	}
-	count, critical = OIDInExtensions(x509.OIDExtensionBasicConstraints, cert.Extensions)
+}
+
+func showBasicConstraints(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionBasicConstraints, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Basic Constraints:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		result.WriteString(fmt.Sprintf("                CA:%t", cert.IsCA))
 		if cert.MaxPathLen > 0 || cert.MaxPathLenZero {
 			result.WriteString(fmt.Sprintf(", pathlen:%d", cert.MaxPathLen))
 		}
 		result.WriteString(fmt.Sprintf("\n"))
 	}
-	count, critical = OIDInExtensions(x509.OIDExtensionSubjectAltName, cert.Extensions)
+}
+
+func showSubjectAltName(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionSubjectAltName, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Subject Alternative Name:"))
-		showCritical(critical)
-		var buf bytes.Buffer
-		for _, name := range cert.DNSNames {
-			commaAppend(&buf, "DNS:"+name)
-		}
-		for _, email := range cert.EmailAddresses {
-			commaAppend(&buf, "email:"+email)
-		}
-		for _, ip := range cert.IPAddresses {
-			commaAppend(&buf, "IP Address:"+ip.String())
-		}
-
-		result.WriteString(fmt.Sprintf("                %v\n", buf.String()))
-		// TODO(drysdale): include other name forms
+		showCritical(result, critical)
+		result.WriteString(fmt.Sprintf("                  %v\n", GeneralNamesToString(&cert.AltNames)))
 	}
 
-	count, critical = OIDInExtensions(x509.OIDExtensionNameConstraints, cert.Extensions)
+}
+
+func showNameConstraints(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionNameConstraints, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Name Constraints:"))
-		showCritical(critical)
-		if len(cert.PermittedDNSDomains) > 0 {
+		showCritical(result, critical)
+		if !cert.Permitted.Empty() {
 			result.WriteString(fmt.Sprintf("                Permitted:\n"))
-			var buf bytes.Buffer
-			for _, name := range cert.PermittedDNSDomains {
-				commaAppend(&buf, "DNS:"+name)
-			}
-			result.WriteString(fmt.Sprintf("                  %v\n", buf.String()))
+			result.WriteString(fmt.Sprintf("                  %v\n", GeneralNamesToString(&cert.Permitted)))
 		}
-		// TODO(drysdale): include other name forms
+		if !cert.Excluded.Empty() {
+			result.WriteString(fmt.Sprintf("                Excluded:\n"))
+			result.WriteString(fmt.Sprintf("                  %v\n", GeneralNamesToString(&cert.Excluded)))
+		}
 	}
+}
 
-	count, critical = OIDInExtensions(x509.OIDExtensionCertificatePolicies, cert.Extensions)
+func showCertPolicies(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionCertificatePolicies, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Certificate Policies:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		for _, oid := range cert.PolicyIdentifiers {
 			result.WriteString(fmt.Sprintf("                Policy: %v\n", oid.String()))
 			// TODO(drysdale): Display any qualifiers associated with the policy
 		}
 	}
+}
 
-	count, critical = OIDInExtensions(x509.OIDExtensionCRLDistributionPoints, cert.Extensions)
+func showCRLDPs(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionCRLDistributionPoints, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 CRL Distribution Points:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		result.WriteString(fmt.Sprintf("                Full Name:\n"))
 		var buf bytes.Buffer
 		for _, pt := range cert.CRLDistributionPoints {
@@ -517,11 +579,92 @@ func CertificateToString(cert *x509.Certificate) string {
 		result.WriteString(fmt.Sprintf("                    %v\n", buf.String()))
 		// TODO(drysdale): Display other GeneralNames types, plus issuer/reasons/relative-name
 	}
+}
 
-	count, critical = OIDInExtensions(x509.OIDExtensionAuthorityInfoAccess, cert.Extensions)
+func showFreshestCRL(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionFreshestCRL, cert.Extensions)
+	if count > 0 {
+		// TODO(drysdale): Commonize with CRLDistributionPoints
+		result.WriteString(fmt.Sprintf("            X509v3 Freshest CRL:"))
+		showCritical(result, critical)
+		result.WriteString(fmt.Sprintf("                Full Name:\n"))
+		var buf bytes.Buffer
+		for _, pt := range cert.FreshestCRL {
+			commaAppend(&buf, "URI:"+pt)
+		}
+		result.WriteString(fmt.Sprintf("                    %v\n", buf.String()))
+	}
+}
+
+func showIssuerAltName(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionIssuerAltName, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Issuer Alternative Name:"))
+		showCritical(result, critical)
+		result.WriteString(fmt.Sprintf("                  %v\n", GeneralNamesToString(&cert.IssuerAltNames)))
+	}
+}
+
+func showPolicyMappings(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionPolicyMappings, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Policy Mappings:"))
+		showCritical(result, critical)
+		var buf bytes.Buffer
+		for _, v := range cert.PolicyMappings {
+			commaAppend(&buf, fmt.Sprintf("%v:%v", v.IssuerPolicy, v.SubjectPolicy))
+		}
+		result.WriteString(fmt.Sprintf("                  %v\n", buf.String()))
+	}
+}
+
+func showPolicyConstraints(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionPolicyConstraints, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Policy Constraints:"))
+		showCritical(result, critical)
+		var buf bytes.Buffer
+		if cert.RequireExplicitPolicy {
+			commaAppend(&buf, fmt.Sprintf("Require Explicit Policy:%d", cert.RequireExplicitPolicySkip))
+		}
+		if cert.InhibitPolicyMapping {
+			commaAppend(&buf, fmt.Sprintf("Inhibit Policy Mapping:%d", cert.InhibitPolicyMappingSkip))
+		}
+		if buf.Len() > 0 {
+			result.WriteString(fmt.Sprintf("                %v\n", buf.String()))
+		}
+	}
+}
+
+func showInhibitAnyPolicy(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionInhibitAnyPolicy, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Inhibit Any Policy:"))
+		showCritical(result, critical)
+		result.WriteString(fmt.Sprintf("                %d\n", cert.InhibitAnyPolicySkip))
+	}
+}
+
+func showSubjectDirectoryAttributes(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionSubjectDirectoryAttributes, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Subject Directory Attributes:"))
+		showCritical(result, critical)
+		for _, attr := range cert.SubjectDirectoryAttributes {
+			var buf bytes.Buffer
+			for _, s := range attr.Values {
+				commaAppend(&buf, hex.EncodeToString(s.FullBytes))
+			}
+			result.WriteString(fmt.Sprintf("                %v: %s\n", attributeOIDToString(attr.Type), buf.String()))
+		}
+	}
+}
+
+func showAuthInfoAccess(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionAuthorityInfoAccess, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            Authority Information Access:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		var issuerBuf bytes.Buffer
 		for _, issuer := range cert.IssuingCertificateURL {
 			commaAppend(&issuerBuf, "URI:"+issuer)
@@ -538,17 +681,50 @@ func CertificateToString(cert *x509.Certificate) string {
 		}
 		// TODO(drysdale): Display other GeneralNames types
 	}
+}
 
-	count, critical = OIDInExtensions(x509.OIDExtensionCTSCT, cert.Extensions)
+func showSubjectInfoAccess(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionSubjectInfoAccess, cert.Extensions)
+	if count > 0 {
+		// TODO(drysdale): commonize with Authority Info Access
+		result.WriteString(fmt.Sprintf("            Subject Information Access:"))
+		showCritical(result, critical)
+		var tsBuf bytes.Buffer
+		for _, ts := range cert.SubjectTimestamps {
+			commaAppend(&tsBuf, "URI:"+ts)
+		}
+		if tsBuf.Len() > 0 {
+			result.WriteString(fmt.Sprintf("                AD Time Stamping - %v\n", tsBuf.String()))
+		}
+		var repoBuf bytes.Buffer
+		for _, repo := range cert.SubjectCARepositories {
+			commaAppend(&repoBuf, "URI:"+repo)
+		}
+		if repoBuf.Len() > 0 {
+			result.WriteString(fmt.Sprintf("                CA repository - %v\n", repoBuf.String()))
+		}
+	}
+}
+
+func showCTPoison(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionCTPoison, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            RFC6962 Certificate Transparency poison:"))
+		showCritical(result, critical)
+	}
+}
+
+func showCTSCT(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionCTSCT, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            RFC6962 Certificate Transparency SCT:"))
-		showCritical(critical)
+		showCritical(result, critical)
 		for i, sctData := range cert.SCTList.SCTList {
 			result.WriteString(fmt.Sprintf("              SCT [%d]:\n", i))
 			var sct ct.SignedCertificateTimestamp
 			_, err := tls.Unmarshal(sctData.Val, &sct)
 			if err != nil {
-				appendHexData(&result, sctData.Val, 16, "                  ")
+				appendHexData(result, sctData.Val, 16, "                  ")
 				result.WriteString("\n")
 				continue
 			}
@@ -557,47 +733,10 @@ func CertificateToString(cert *x509.Certificate) string {
 			result.WriteString(fmt.Sprintf("                  Timestamp: %d\n", sct.Timestamp))
 			result.WriteString(fmt.Sprintf("                  Signature: %s\n", sct.Signature.Algorithm))
 			result.WriteString(fmt.Sprintf("                  Signature:\n"))
-			appendHexData(&result, sct.Signature.Signature, 16, "                    ")
+			appendHexData(result, sct.Signature.Signature, 16, "                    ")
 			result.WriteString("\n")
 		}
 	}
-
-	for _, ext := range cert.Extensions {
-		// Skip extensions that are already cracked out
-		if oidAlreadyPrinted(ext.Id) {
-			continue
-		}
-		result.WriteString(fmt.Sprintf("            %v:", ext.Id))
-		if ext.Critical {
-			result.WriteString(" critical")
-		}
-		result.WriteString("\n")
-		result.WriteString("                .....\n")
-	}
-
-	result.WriteString(fmt.Sprintf("    Signature Algorithm: %v\n", cert.SignatureAlgorithm))
-	appendHexData(&result, cert.Signature, 18, "         ")
-	result.WriteString("\n")
-
-	return result.String()
-}
-
-// TODO(drysdale): remove this once all standard OIDs are parsed and printed.
-func oidAlreadyPrinted(oid asn1.ObjectIdentifier) bool {
-	if oid.Equal(x509.OIDExtensionSubjectKeyId) ||
-		oid.Equal(x509.OIDExtensionKeyUsage) ||
-		oid.Equal(x509.OIDExtensionExtendedKeyUsage) ||
-		oid.Equal(x509.OIDExtensionAuthorityKeyId) ||
-		oid.Equal(x509.OIDExtensionBasicConstraints) ||
-		oid.Equal(x509.OIDExtensionSubjectAltName) ||
-		oid.Equal(x509.OIDExtensionCertificatePolicies) ||
-		oid.Equal(x509.OIDExtensionNameConstraints) ||
-		oid.Equal(x509.OIDExtensionCRLDistributionPoints) ||
-		oid.Equal(x509.OIDExtensionAuthorityInfoAccess) ||
-		oid.Equal(x509.OIDExtensionCTSCT) {
-		return true
-	}
-	return false
 }
 
 // CertificateFromPEM takes a string representing a certificate in PEM format
