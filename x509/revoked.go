@@ -153,10 +153,10 @@ func ParseCertificateListDER(derBytes []byte) (*CertificateList, error) {
 	// First parse the DER into the pkix structures.
 	pkixList := new(pkix.CertificateList)
 	if rest, err := asn1.Unmarshal(derBytes, pkixList); err != nil {
-		errs.AddID(ErrInvalidCertList, err)
+		errs.addIDFatal(ErrInvalidCertList, err)
 		return nil, &errs
 	} else if len(rest) != 0 {
-		errs.AddID(ErrTrailingCertList)
+		errs.addIDFatal(ErrTrailingCertList)
 		return nil, &errs
 	}
 
@@ -201,51 +201,51 @@ func ParseCertificateListDER(derBytes []byte) (*CertificateList, error) {
 			// RFC 5280 s5.2.1
 			var a authKeyId
 			if rest, err := asn1.Unmarshal(e.Value, &a); err != nil {
-				errs.AddID(ErrInvalidCertListAuthKeyID, err)
+				errs.addIDFatal(ErrInvalidCertListAuthKeyID, err)
 			} else if len(rest) != 0 {
-				errs.AddID(ErrTrailingCertListAuthKeyID)
+				errs.addIDFatal(ErrTrailingCertListAuthKeyID)
 			}
 			certList.TBSCertList.AuthorityKeyID = a.Id
 		case e.Id.Equal(OIDExtensionIssuerAltName):
 			// RFC 5280 s5.2.2
 			if err := parseGeneralNames(e.Value, &certList.TBSCertList.IssuerAltNames); err != nil {
-				errs.AddID(ErrInvalidCertListIssuerAltName, err)
+				errs.addIDFatal(ErrInvalidCertListIssuerAltName, err)
 			}
 		case e.Id.Equal(OIDExtensionCRLNumber):
 			// RFC 5280 s5.2.3
 			if rest, err := asn1.Unmarshal(e.Value, &certList.TBSCertList.CRLNumber); err != nil {
-				errs.AddID(ErrInvalidCertListCRLNumber, err)
+				errs.addIDFatal(ErrInvalidCertListCRLNumber, err)
 			} else if len(rest) != 0 {
-				errs.AddID(ErrTrailingCertListCRLNumber)
+				errs.addIDFatal(ErrTrailingCertListCRLNumber)
 			}
 			if certList.TBSCertList.CRLNumber < 0 {
-				errs.AddID(ErrNegativeCertListCRLNumber, certList.TBSCertList.CRLNumber)
+				errs.addIDFatal(ErrNegativeCertListCRLNumber, certList.TBSCertList.CRLNumber)
 			}
 		case e.Id.Equal(OIDExtensionDeltaCRLIndicator):
 			// RFC 5280 s5.2.4
 			if rest, err := asn1.Unmarshal(e.Value, &certList.TBSCertList.BaseCRLNumber); err != nil {
-				errs.AddID(ErrInvalidCertListDeltaCRL, err)
+				errs.addIDFatal(ErrInvalidCertListDeltaCRL, err)
 			} else if len(rest) != 0 {
-				errs.AddID(ErrTrailingCertListDeltaCRL)
+				errs.addIDFatal(ErrTrailingCertListDeltaCRL)
 			}
 			if certList.TBSCertList.BaseCRLNumber < 0 {
-				errs.AddID(ErrNegativeCertListDeltaCRL, certList.TBSCertList.BaseCRLNumber)
+				errs.addIDFatal(ErrNegativeCertListDeltaCRL, certList.TBSCertList.BaseCRLNumber)
 			}
 		case e.Id.Equal(OIDExtensionIssuingDistributionPoint):
 			parseIssuingDistributionPoint(e.Value, &certList.TBSCertList.IssuingDistributionPoint, &certList.TBSCertList.IssuingDPFullNames, &errs)
 		case e.Id.Equal(OIDExtensionFreshestCRL):
 			// RFC 5280 s5.2.6
 			if err := parseDistributionPoints(e.Value, &certList.TBSCertList.FreshestCRLDistributionPoint); err != nil {
-				errs.AddID(ErrInvalidCertListFreshestCRL, err)
+				errs.addIDFatal(ErrInvalidCertListFreshestCRL, err)
 				return nil, err
 			}
 		case e.Id.Equal(OIDExtensionAuthorityInfoAccess):
 			// RFC 5280 s5.2.7
 			var aia []accessDescription
 			if rest, err := asn1.Unmarshal(e.Value, &aia); err != nil {
-				errs.AddID(ErrInvalidCertListAuthInfoAccess, err)
+				errs.addIDFatal(ErrInvalidCertListAuthInfoAccess, err)
 			} else if len(rest) != 0 {
-				errs.AddID(ErrTrailingCertListAuthInfoAccess)
+				errs.addIDFatal(ErrTrailingCertListAuthInfoAccess)
 			}
 
 			for _, v := range aia {
@@ -263,7 +263,7 @@ func ParseCertificateListDER(derBytes []byte) (*CertificateList, error) {
 			}
 		default:
 			if e.Critical {
-				errs.AddID(ErrUnhandledCriticalCertListExtension, e.Id)
+				errs.addIDFatal(ErrUnhandledCriticalCertListExtension, e.Id)
 			}
 		}
 	}
@@ -280,9 +280,9 @@ func ParseCertificateListDER(derBytes []byte) (*CertificateList, error) {
 func parseIssuingDistributionPoint(data []byte, idp *IssuingDistributionPoint, name *GeneralNames, errs *Errors) {
 	// RFC 5280 s5.2.5
 	if rest, err := asn1.Unmarshal(data, idp); err != nil {
-		errs.AddID(ErrInvalidCertListIssuingDP, err)
+		errs.addIDFatal(ErrInvalidCertListIssuingDP, err)
 	} else if len(rest) != 0 {
-		errs.AddID(ErrTrailingCertListIssuingDP)
+		errs.addIDFatal(ErrTrailingCertListIssuingDP)
 	}
 
 	typeCount := 0
@@ -296,11 +296,11 @@ func parseIssuingDistributionPoint(data []byte, idp *IssuingDistributionPoint, n
 		typeCount++
 	}
 	if typeCount > 1 {
-		errs.AddID(ErrCertListIssuingDPMultipleTypes, idp.OnlyContainsUserCerts, idp.OnlyContainsCACerts, idp.OnlyContainsAttributeCerts)
+		errs.addIDFatal(ErrCertListIssuingDPMultipleTypes, idp.OnlyContainsUserCerts, idp.OnlyContainsCACerts, idp.OnlyContainsAttributeCerts)
 	}
 	for _, fn := range idp.DistributionPoint.FullName {
 		if _, err := parseGeneralName(fn.FullBytes, name, false); err != nil {
-			errs.AddID(ErrCertListIssuingDPInvalidFullName, err)
+			errs.addIDFatal(ErrCertListIssuingDPInvalidFullName, err)
 		}
 	}
 }
@@ -332,26 +332,26 @@ func parseRevokedCertificate(pkixRevoked pkix.RevokedCertificate, errs *Errors) 
 			// RFC 5280, s5.3.1
 			var reason asn1.Enumerated
 			if rest, err := asn1.Unmarshal(e.Value, &reason); err != nil {
-				errs.AddID(ErrInvalidRevocationReason, err)
+				errs.addIDFatal(ErrInvalidRevocationReason, err)
 			} else if len(rest) != 0 {
-				errs.AddID(ErrTrailingRevocationReason)
+				errs.addIDFatal(ErrTrailingRevocationReason)
 			}
 			result.RevocationReason = RevocationReasonCode(reason)
 		case e.Id.Equal(OIDExtensionInvalidityDate):
 			// RFC 5280, s5.3.2
 			if rest, err := asn1.Unmarshal(e.Value, &result.InvalidityDate); err != nil {
-				errs.AddID(ErrInvalidRevocationInvalidityDate, err)
+				errs.addIDFatal(ErrInvalidRevocationInvalidityDate, err)
 			} else if len(rest) != 0 {
-				errs.AddID(ErrTrailingRevocationInvalidityDate)
+				errs.addIDFatal(ErrTrailingRevocationInvalidityDate)
 			}
 		case e.Id.Equal(OIDExtensionCertificateIssuer):
 			// RFC 5280, s5.3.3
 			if err := parseGeneralNames(e.Value, &result.Issuer); err != nil {
-				errs.AddID(ErrInvalidRevocationIssuer, err)
+				errs.addIDFatal(ErrInvalidRevocationIssuer, err)
 			}
 		default:
 			if e.Critical {
-				errs.AddID(ErrUnhandledCriticalRevokedCertExtension, e.Id)
+				errs.addIDFatal(ErrUnhandledCriticalRevokedCertExtension, e.Id)
 			}
 		}
 	}
