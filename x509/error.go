@@ -183,6 +183,14 @@ func (e *Errors) AddID(id ErrorID, args ...interface{}) {
 	e.Errs = append(e.Errs, NewError(id, args...))
 }
 
+// addIDFatal adds the Error identified by the given id to an Errors object,
+// marking it as fatal
+func (e *Errors) addIDFatal(id ErrorID, args ...interface{}) {
+	err := NewError(id, args...)
+	err.Fatal = true
+	e.Errs = append(e.Errs, err)
+}
+
 func (e Errors) combineErrors(errfn func(Error) string) string {
 	if len(e.Errs) == 0 {
 		return ""
