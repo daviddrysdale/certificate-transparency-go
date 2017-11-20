@@ -11,3 +11,11 @@ func TestTemplateIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestErrorsAddIDFatal(t *testing.T) {
+	var errs Errors
+	errs.addIDFatal(ErrUnexpectedlyCriticalCertListExtension, "test extension")
+	if err := errs.FirstFatal(); err == nil {
+		t.Errorf("FirstFatal() = nil; want non-nil")
+	}
+}
