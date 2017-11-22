@@ -58,6 +58,10 @@ func (gn GeneralNames) Empty() bool {
 }
 
 func parseGeneralNames(value []byte, gname *GeneralNames) error {
+	return parseGeneralNamesWithTag(value, asn1.ClassUniversal, asn1.TagSequence, gname)
+}
+
+func parseGeneralNamesWithTag(value []byte, wantClass, wantTag int, gname *GeneralNames) error {
 	// RFC 5280, 4.2.1.6
 	// GeneralNames ::= SEQUENCE SIZE (1..MAX) OF GeneralName
 	//
@@ -78,8 +82,8 @@ func parseGeneralNames(value []byte, gname *GeneralNames) error {
 	} else if len(rest) != 0 {
 		return fmt.Errorf("x509: trailing data after GeneralNames")
 	}
-	if !seq.IsCompound || seq.Tag != asn1.TagSequence || seq.Class != asn1.ClassUniversal {
-		return fmt.Errorf("x509: failed to parse GeneralNames sequence, tag %+v", seq)
+	if !seq.IsCompound || seq.Tag != wantTag || seq.Class != wantClass {
+		return fmt.Errorf("x509: failed to parse GeneralNames sequence, tag %+v not %d/%d", seq, wantClass, wantTag)
 	}
 
 	rest = seq.Bytes

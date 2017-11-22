@@ -47,6 +47,7 @@
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Support unique IDs
+//     - Support more AuthorityKeyID fields
 //     - Export and use OID values throughout.
 //     - Export OIDFromNamedCurve().
 //     - Export SignatureAlgorithmFromAI().
@@ -234,7 +235,9 @@ type publicKeyInfo struct {
 
 // RFC 5280,  4.2.1.1
 type authKeyId struct {
-	Id []byte `asn1:"optional,tag:0"`
+	Id           []byte        `asn1:"optional,tag:0"`
+	Issuer       asn1.RawValue `asn1:"optional,tag:1"`
+	SerialNumber *big.Int      `asn1:"optional,tag:2"`
 }
 
 // SignatureAlgorithm indicates the algorithm used to sign a certificate.
@@ -841,8 +844,10 @@ type Certificate struct {
 	// interpreted as MaxPathLen not being set.
 	MaxPathLenZero bool
 
-	SubjectKeyId   []byte
-	AuthorityKeyId []byte
+	SubjectKeyId             []byte
+	AuthorityKeyId           []byte
+	AuthorityKeyIssuer       GeneralNames
+	AuthorityKeySerialNumber *big.Int
 
 	// RFC 5280, 4.2.2.1 (Authority Information Access)
 	OCSPServer            []string
@@ -1963,7 +1968,17 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				} else if len(rest) != 0 {
 					return nil, errors.New("x509: trailing data after X.509 authority key-id")
 				}
+
 				out.AuthorityKeyId = a.Id
+				if len(a.Issuer.FullBytes) > 0 {
+					if err := parseGeneralNamesWithTag(a.Issuer.FullBytes, asn1.ClassContextSpecific, 1, &out.AuthorityKeyIssuer); err != nil {
+						nfe.AddError(fmt.Errorf("x509: failed to parse auth key issuer: %v", err))
+					}
+				}
+				out.AuthorityKeySerialNumber = a.SerialNumber
+				if len(out.AuthorityKeyId) == 0 && out.AuthorityKeySerialNumber == nil && out.AuthorityKeyIssuer.Empty() {
+					nfe.AddError(errors.New("x509: empty authority key identifier"))
+				}
 
 			case OIDExtensionExtendedKeyUsage[3]:
 				// RFC 5280, 4.2.1.12.  Extended Key Usage
@@ -2455,7 +2470,9 @@ func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId 
 
 	if len(authorityKeyId) > 0 && !oidInExtensions(OIDExtensionAuthorityKeyId, template.ExtraExtensions) {
 		ret[n].Id = OIDExtensionAuthorityKeyId
-		ret[n].Value, err = asn1.Marshal(authKeyId{authorityKeyId})
+		// We do not support building of other fields (authority cert issuer, authority cert serial number)
+		// as use of these fields is not recommended.
+		ret[n].Value, err = asn1.Marshal(authKeyId{Id: authorityKeyId})
 		if err != nil {
 			return
 		}

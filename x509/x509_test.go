@@ -2670,6 +2670,8 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "KeyUsageNonDER", in: "testdata/invalid/xf-ext-key-usage-wrong-der.pem", wantErr: "trailing zeros"},
 		{desc: "KeyUsageTooManyBits", in: "testdata/invalid/xf-ext-key-usage-too-long.pem", wantErr: "incorrect number of bits"},
 		{desc: "KeyUsageEmpty", in: "testdata/invalid/xf-ext-key-usage-empty.pem", wantErr: "no bits set"},
+		{desc: "AuthKeyIDIssuerInvalid", in: "testdata/invalid/xf-ext-auth-keyid-invalid-issuer.pem", wantErr: "failed to parse auth key issuer"},
+		{desc: "AuthKeyIDEmpty", in: "testdata/invalid/xf-ext-auth-keyid-noid.pem", wantErr: "empty authority key identifier"},
 	}
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
