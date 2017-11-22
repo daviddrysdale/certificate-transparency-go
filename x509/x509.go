@@ -176,7 +176,9 @@ type publicKeyInfo struct {
 
 // RFC 5280,  4.2.1.1
 type authKeyId struct {
-	Id []byte `asn1:"optional,tag:0"`
+	Id           []byte        `asn1:"optional,tag:0"`
+	Issuer       asn1.RawValue `asn1:"optional,tag:1"`
+	SerialNumber *big.Int      `asn1:"optional,tag:2"`
 }
 
 // SignatureAlgorithm indicates the algorithm used to sign a certificate.
@@ -733,8 +735,10 @@ type Certificate struct {
 	// interpreted as MaxPathLen not being set.
 	MaxPathLenZero bool
 
-	SubjectKeyId   []byte
-	AuthorityKeyId []byte
+	SubjectKeyId             []byte
+	AuthorityKeyId           []byte
+	AuthorityKeyIssuer       GeneralNames
+	AuthorityKeySerialNumber *big.Int
 
 	// RFC 5280, 4.2.2.1 (Authority Information Access)
 	OCSPServer            []string
@@ -1514,6 +1518,14 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 					errs.addIDFatal(errAsn1TrailingAuthorityKeyID)
 				}
 				out.AuthorityKeyId = a.Id
+				rest := a.Issuer.Bytes
+				for len(rest) > 0 {
+					rest = parseGeneralName(rest, &out.AuthorityKeyIssuer, false, errs)
+				}
+				out.AuthorityKeySerialNumber = a.SerialNumber
+				if len(out.AuthorityKeyId) == 0 && out.AuthorityKeySerialNumber == nil && out.AuthorityKeyIssuer.Empty() {
+					errs.AddID(errAuthorityKeyIDEmpty)
+				}
 
 			case OIDExtensionExtendedKeyUsage[3]:
 				// RFC 5280, 4.2.1.12.  Extended Key Usage
@@ -1991,7 +2003,8 @@ func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.E
 
 	if len(authorityKeyId) > 0 && !oidInExtensions(OIDExtensionAuthorityKeyId, template.ExtraExtensions) {
 		ret[n].Id = OIDExtensionAuthorityKeyId
-		ret[n].Value, err = asn1.Marshal(authKeyId{authorityKeyId})
+		// TODO(drysdale): support building of other fields (authority cert issuer, authority cert serial number)
+		ret[n].Value, err = asn1.Marshal(authKeyId{Id: authorityKeyId})
 		if err != nil {
 			return
 		}
