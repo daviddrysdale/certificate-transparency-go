@@ -761,8 +761,12 @@ type Certificate struct {
 
 	// Name constraints
 	PermittedDNSDomainsCritical bool // if true then the name constraints are marked critical.
-	PermittedDNSDomains         []string
-	ExcludedDNSDomains          []string
+	Permitted                   GeneralNames
+	Excluded                    GeneralNames
+	// The following fields are preserved for back-compatibility, but are equal to
+	// the Permitted.DNSNames / Excluded.DNSNames.
+	PermittedDNSDomains []string
+	ExcludedDNSDomains  []string
 
 	// CRL Distribution Points
 	CRLDistributionPoints []string
@@ -1101,7 +1105,9 @@ type nameConstraints struct {
 }
 
 type generalSubtree struct {
-	Name string `asn1:"tag:2,optional,ia5"`
+	Base    asn1.RawValue
+	Minimum int `asn1:"optional,tag:0,default:0"`
+	Maximum int `asn1:"optional,tag:1"`
 }
 
 // RFC 5280, 4.2.2.1
@@ -1234,6 +1240,67 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, errs *Error
 		errs.AddID(errPubKeyUnsupportedAlgorithm, keyData.Algorithm)
 		return nil
 	}
+}
+
+func (gn GeneralNames) buildSubtree() ([]generalSubtree, error) {
+	result := make([]generalSubtree, gn.Len())
+
+	i := 0
+	for _, v := range gn.DNSNames {
+		result[i].Base = asn1.RawValue{Tag: 2, Class: asn1.ClassContextSpecific, Bytes: []byte(v)}
+		i++
+	}
+	for _, v := range gn.EmailAddresses {
+		result[i].Base = asn1.RawValue{Tag: 1, Class: asn1.ClassContextSpecific, Bytes: []byte(v)}
+		i++
+	}
+	for _, v := range gn.DirectoryNames {
+		data, err := asn1.MarshalWithParams(v.ToRDNSequence(), "explicit")
+		if err != nil {
+			return nil, err
+		}
+		// Force the tag to be [4] (context-specific, constructed).
+		data[0] = (asn1.ClassContextSpecific << 6) | (1 << 5) | 4
+		result[i].Base = asn1.RawValue{FullBytes: data}
+		i++
+	}
+	for _, v := range gn.URIs {
+		result[i].Base = asn1.RawValue{Tag: 6, Class: asn1.ClassContextSpecific, Bytes: []byte(v)}
+		i++
+	}
+	for _, v := range gn.IPNets {
+		ip := v.IP.To4()
+		if ip == nil {
+			var data [32]byte
+			for i, b := range v.IP {
+				data[i] = b
+			}
+			for i, b := range v.Mask {
+				data[16+i] = b
+			}
+			result[i].Base = asn1.RawValue{Tag: 7, Class: asn1.ClassContextSpecific, Bytes: data[:]}
+		} else {
+			var data [8]byte
+			for i, b := range v.IP {
+				data[i] = b
+			}
+			for i, b := range v.Mask {
+				data[4+i] = b
+			}
+			result[i].Base = asn1.RawValue{Tag: 7, Class: asn1.ClassContextSpecific, Bytes: data[:]}
+		}
+		i++
+	}
+	for _, v := range gn.RegisteredIDs {
+		data, err := asn1.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		data[0] = (asn1.ClassContextSpecific << 6) | 8
+		result[i].Base = asn1.RawValue{Tag: 8, Class: asn1.ClassContextSpecific, FullBytes: data}
+		i++
+	}
+	return result, nil
 }
 
 func parseDistributionPoints(data []byte, crldp *[]string, errs *Errors) {
@@ -1485,25 +1552,37 @@ func parseCertificate(in *certificate, errs *Errors) *Certificate {
 				} else if len(rest) != 0 {
 					errs.addIDFatal(errAsn1TrailingNameConstraints)
 				}
-
-				getDNSNames := func(subtrees []generalSubtree, isCritical bool) []string {
-					var dnsNames []string
-					for _, subtree := range subtrees {
-						if len(subtree.Name) == 0 {
-							if isCritical {
-								errs.AddID(errCriticalExtensionUnhandled, e.Id)
-							}
-							continue
-						}
-						dnsNames = append(dnsNames, subtree.Name)
-					}
-
-					return dnsNames
+				if len(constraints.Excluded) == 0 && len(constraints.Permitted) == 0 {
+					errs.AddID(errNameConstraintsEmpty)
 				}
 
-				out.PermittedDNSDomains = getDNSNames(constraints.Permitted, e.Critical)
-				out.ExcludedDNSDomains = getDNSNames(constraints.Excluded, e.Critical)
-				out.PermittedDNSDomainsCritical = e.Critical
+				for _, subtree := range constraints.Excluded {
+					if subtree.Minimum > 0 || subtree.Maximum > 0 {
+						errs.AddID(errNameConstraintsExcludedMinMax)
+					}
+					rest := parseGeneralName(subtree.Base.FullBytes, &out.Excluded, true, errs)
+					if len(rest) > 0 {
+						errs.AddID(errAsn1TrailingNameConstraintsExcluded)
+					}
+					if len(out.Excluded.RegisteredIDs) > 0 {
+						errs.AddID(errNameConstraintsRegisteredID, "Excluded")
+					}
+				}
+				out.ExcludedDNSDomains = out.Excluded.DNSNames
+
+				for _, subtree := range constraints.Permitted {
+					if subtree.Minimum > 0 || subtree.Maximum > 0 {
+						errs.AddID(errNameConstraintsPermittedMinMax)
+					}
+					rest := parseGeneralName(subtree.Base.FullBytes, &out.Permitted, true, errs)
+					if len(rest) > 0 {
+						errs.AddID(errAsn1TrailingNameConstraintsPermitted)
+					}
+					if len(out.Permitted.RegisteredIDs) > 0 {
+						errs.AddID(errNameConstraintsRegisteredID, "Permitted")
+					}
+				}
+				out.PermittedDNSDomains = out.Permitted.DNSNames
 
 			case OIDExtensionCRLDistributionPoints[3]:
 				// RFC 5280, 4.2.1.13
@@ -2102,27 +2181,40 @@ func buildExtensions(template *Certificate, authorityKeyId []byte) (ret []pkix.E
 		n++
 	}
 
-	if (len(template.PermittedDNSDomains) > 0 || len(template.ExcludedDNSDomains) > 0) &&
-		!oidInExtensions(OIDExtensionNameConstraints, template.ExtraExtensions) {
-		ret[n].Id = OIDExtensionNameConstraints
-		ret[n].Critical = template.PermittedDNSDomainsCritical
+	if !oidInExtensions(OIDExtensionNameConstraints, template.ExtraExtensions) {
+		permitted := &template.Permitted
+		excluded := &template.Excluded
 
-		var out nameConstraints
-
-		out.Permitted = make([]generalSubtree, len(template.PermittedDNSDomains))
-		for i, permitted := range template.PermittedDNSDomains {
-			out.Permitted[i] = generalSubtree{Name: permitted}
+		if permitted.Empty() && len(template.PermittedDNSDomains) > 0 {
+			permitted = &GeneralNames{DNSNames: template.PermittedDNSDomains}
 		}
-		out.Excluded = make([]generalSubtree, len(template.ExcludedDNSDomains))
-		for i, excluded := range template.ExcludedDNSDomains {
-			out.Excluded[i] = generalSubtree{Name: excluded}
+		if excluded.Empty() && len(template.ExcludedDNSDomains) > 0 {
+			excluded = &GeneralNames{DNSNames: template.ExcludedDNSDomains}
 		}
 
-		ret[n].Value, err = asn1.Marshal(out)
-		if err != nil {
-			return
+		if !permitted.Empty() || !excluded.Empty() {
+			ret[n].Id = OIDExtensionNameConstraints
+			ret[n].Critical = template.PermittedDNSDomainsCritical
+
+			var out nameConstraints
+			if !permitted.Empty() {
+				out.Permitted, err = permitted.buildSubtree()
+				if err != nil {
+					return
+				}
+			}
+			if !excluded.Empty() {
+				out.Excluded, err = excluded.buildSubtree()
+				if err != nil {
+					return
+				}
+			}
+			ret[n].Value, err = asn1.Marshal(out)
+			if err != nil {
+				return
+			}
+			n++
 		}
-		n++
 	}
 
 	if len(template.CRLDistributionPoints) > 0 &&
@@ -2265,7 +2357,8 @@ func signingParamsForPublicKey(pub interface{}, requestedSigAlgo SignatureAlgori
 //    - AltNames and/or DNSNames, EmailAddresses, IPAddresses
 //    - IssuerAltNames
 //    - PolicyIdentifiers
-//    - PermittedDNSDomainsCritical, PermittedDNSDomains, ExcludedDNSDomains
+//    - Permitted (and/or PermittedDNSDomainsCritical, PermittedDNSDomains)
+//    - Excluded (and/or ExcludedDNSDomains)
 //    - CRLDistributionPoints
 //    - RawSCT, SCTList
 //
