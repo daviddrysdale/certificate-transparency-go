@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,27 @@ import (
 	"github.com/google/certificate-transparency-go/x509"
 	"github.com/google/certificate-transparency-go/x509/pkix"
 )
+
+func TestResponseStatusString(t *testing.T) {
+	var tests = []struct {
+		in   ResponseStatus
+		want string
+	}{
+		{in: Success, want: "success"},
+		{in: Malformed, want: "malformed"},
+		{in: InternalError, want: "internal error"},
+		{in: TryLater, want: "try later"},
+		{in: SignatureRequired, want: "signature required"},
+		{in: Unauthorized, want: "unauthorized"},
+		{in: ResponseStatus(99), want: "unknown OCSP status: 99"},
+	}
+	for _, test := range tests {
+		got := test.in.String()
+		if got != test.want {
+			t.Errorf("ResponseStatus(%d).String()=%q, want %q", test.in, got, test.want)
+		}
+	}
+}
 
 func TestOCSPDecode(t *testing.T) {
 	responseBytes, _ := hex.DecodeString(ocspResponseHex)
@@ -117,6 +139,118 @@ func TestOCSPSignature(t *testing.T) {
 	}
 }
 
+func TestParseRequest(t *testing.T) {
+	var tests = []struct {
+		desc    string
+		in      string // as hex
+		wantErr string
+	}{
+		{
+			desc: "valid request",
+			in: ("3051" + // OCSPRequest SEQUENCE
+				("304f" + // TBSRequest SEQUENCE
+					("304d" + // SEQUENCE OF Request
+						("304b" + // Request SEQUENCE
+							("3049" + // CertID SEQUENCE
+								("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+									("0605" + "2b0e03021a") + // OID:  1.3.14.3.2.26 (sha1)
+									"0500") + // NULL
+								("0414" + // issuerNameHash OCTET STRING
+									"c0fe0278fc99188891b3f212e9c7e1b21ab7bfc0") +
+								("0414" + // issuerKeyHash OCTET STRING
+									"0dfc1df0a9e0f01ce7f2b213177e6f8d157cd4f6") +
+								("0210" + // CertificateSerialNumber INTEGER
+									"017f77deb3bcbb235d44ccc7dba62e72")))))),
+		},
+		{
+			desc: "valid multi-cert request",
+			in: ("3081a0" + // OCSPRequest SEQUENCE
+				("30819d" + // TBSRequest SEQUENCE
+					("30819a" + // SEQUENCE OF Request
+						("304b" + // Request SEQUENCE
+							("3049" + // CertID SEQUENCE
+								("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+									("0605" + "2b0e03021a") + // OID:  1.3.14.3.2.26 (sha1)
+									"0500") + // NULL
+								("0414" + // issuerNameHash OCTET STRING
+									"c0fe0278fc99188891b3f212e9c7e1b21ab7bfc0") +
+								("0414" + // issuerKeyHash OCTET STRING
+									"0dfc1df0a9e0f01ce7f2b213177e6f8d157cd4f6") +
+								("0210" + // CertificateSerialNumber INTEGER
+									"017f77deb3bcbb235d44ccc7dba62e72"))) +
+						("304b" + // Request SEQUENCE
+							("3049" + // CertID SEQUENCE
+								("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+									("0605" + "2b0e03021a") + // OID: 1.3.14.3.2.26 (sha1)
+									"0500") + // NULL
+								("0414" + // issuerNameHash OCTET STRING
+									"c0fe0278fc99188891b3f212e9c7e1b21ab7bfc6") +
+								("0414" + // issuerKeyHash OCTET STRING
+									"0dfc1df0a9e0f01ce7f2b213177e6f8d157cd4f0") +
+								("0210" + // CertificateSerialNumber INTEGER
+									"017f77deb3bcbb235d44ccc7dba62e73")))))),
+		},
+		{
+			desc: "trailing data",
+			in: ("3051" + // OCSPRequest SEQUENCE
+				("304f" + // TBSRequest SEQUENCE
+					("304d" + // SEQUENCE OF Request
+						("304b" + // Request SEQUENCE
+							("3049" + // CertID SEQUENCE
+								("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+									("0605" + "2b0e03021a") + // OID:  1.3.14.3.2.26 (sha1)
+									"0500") + // NULL
+								("0414" + // issuerNameHash OCTET STRING
+									"c0fe0278fc99188891b3f212e9c7e1b21ab7bfc0") +
+								("0414" + // issuerKeyHash OCTET STRING
+									"0dfc1df0a9e0f01ce7f2b213177e6f8d157cd4f6") +
+								("0210" + // CertificateSerialNumber INTEGER
+									"017f77deb3bcbb235d44ccc7dba62e72"))))) +
+				"ff"),
+			wantErr: "trailing data",
+		},
+		{
+			desc: "unknown hash OID",
+			in: ("3051" + // OCSPRequest SEQUENCE
+				("304f" + // TBSRequest SEQUENCE
+					("304d" + // SEQUENCE OF Request
+						("304b" + // Request SEQUENCE
+							("3049" + // CertID SEQUENCE
+								("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+									("0605" + "2b0e030201") + // OID:  1.3.14.3.2.1
+									"0500") + // NULL
+								("0414" + // issuerNameHash OCTET STRING
+									"c0fe0278fc99188891b3f212e9c7e1b21ab7bfc0") +
+								("0414" + // issuerKeyHash OCTET STRING
+									"0dfc1df0a9e0f01ce7f2b213177e6f8d157cd4f6") +
+								("0210" + // CertificateSerialNumber INTEGER
+									"017f77deb3bcbb235d44ccc7dba62e72")))))),
+			wantErr: "unknown hash function",
+		},
+		{
+			desc:    "bogus data",
+			in:      "000000",
+			wantErr: "asn1: structure error",
+		},
+	}
+	for _, test := range tests {
+		data, _ := hex.DecodeString(test.in)
+		got, err := ParseRequest(data)
+		if err != nil {
+			if test.wantErr == "" {
+				t.Errorf("ParseRequest(%s)=nil,%v; want _,nil", test.desc, err)
+			} else if !strings.Contains(err.Error(), test.wantErr) {
+				t.Errorf("ParseRequest(%s)=nil,%v; want _,err containing %q", test.desc, err, test.wantErr)
+			}
+			continue
+		}
+		if test.wantErr != "" {
+			t.Errorf("ParseRequest(%s)=%+v,nil; want nil, err containing %q", test.desc, got, test.wantErr)
+		}
+
+	}
+}
+
 func TestOCSPRequest(t *testing.T) {
 	leafCert, _ := hex.DecodeString(leafCertHex)
 	cert, err := x509.ParseCertificate(leafCert)
@@ -189,6 +323,598 @@ func TestOCSPRequest(t *testing.T) {
 			expectedBytes,
 			marshaledRequest,
 		)
+	}
+}
+
+func TestParseResponse(t *testing.T) {
+	var tests = []struct {
+		desc    string
+		in      string // as hex
+		want    Response
+		wantErr string
+	}{
+		{
+			desc: "valid response", // copy of ocspResponseWithoutCertHex below
+			in: ("308206bc" + // OCSPResponse SEQUENCE
+				"0a0100" + // responseStatus ENUMERATED = successful(0)
+				("a08206b5" + // responseBytes [0] EXPLICIT
+					("308206b1" + // ResponseBytes SEQUENCE
+						"0609" + "2b0601050507300101" + // responseType OID = 1.3.6.1.5.5.7.48.1.1 = Basic Response
+						("048206a2" + // response OCTET STRING
+							("3082069e" + // BasicOCSPResponse SEQUENCE
+								("3081c9" + // tbsResponseData ResponseData SEQUENCE
+									("a14e" + // responderID byName [1] Name context-specific, constructed
+										("304c" +
+											("310b" +
+												("3009" +
+													"0603" + "550406" +
+													"1302" + "494c")) +
+											("3116" +
+												("3014" +
+													"0603" + "55040a" +
+													"130d" + "5374617274436f6d204c74642e")) +
+											("3125" +
+												("3023" +
+													"0603" + "550403" +
+													"131c" + "5374617274436f6d20436c61" +
+													"73732031204f435350205369676e6572")))) +
+									("180f" + // producedAt GeneralizedTime
+										"32303130303730373137333531375a") +
+									("3066" + // responses SEQUENCE OF
+										("3064" + // SingleResponse SEQUENCE
+											("303c" + // CertID SEQUENCE
+												("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+													"0605" + "2b0e03021a" + // OID: 1.3.14.3.2.26 (sha1)
+													"0500") + // NULL
+												("0414" + // issuerNameHash OCTET STRING
+													"6568874f40750f016a3475625e1f5c93e5a26d58") +
+												("0414" + // issuerKeyHash OCTET STRING
+													"eb4234d098b0ab9ff41b6b08f7cc642eef0e2c45") +
+												("0203" + "01d0fa")) + // CertificateSerialNumber INTEGER
+											"8000" + // certStatus CHOICE = [0] good
+											("180f" + // thisUpdate GeneralizedTime
+												"32303130303730373135303130355a") +
+											("a011" + // nextUpdate EXPLICIT [0]
+												("180f" + // GeneralizedTime
+													"32303130303730373138333531375a"))))) +
+								("300d" + // signatureAlgorithm
+									"0609" + "2a864886f70d010105" + // OID: 1.2.840.113549.1.1.5 sha1-with-rsa-signature
+									"0500") + // NULL
+								("03820101" + // signature BIT STRING
+									"00ab557ff070d1d7cebbb5f0ec91a15c" +
+									"3fed22eb2e1b8244f1b84545f013a4fb" +
+									"46214c5e3fbfbebb8a56acc2b9db19f6" +
+									"8fd3c3201046b3824d5ba689f9986432" +
+									"8710cb467195eb37d84f539e49f85931" +
+									"6b32964dc3e47e36814ce94d6c56dd02" +
+									"733b1d0802f7ff4eebdbbd2927dcf580" +
+									"f16cbc290f91e81b53cb365e7223f1d6" +
+									"e20a88ea064104875e0145672b20fc14" +
+									"829d51ca122f5f5d77d3ad6c83889c55" +
+									"c7dc43680ba2fe3cef8b05dbcabdc0d3" +
+									"e09aaf9725597f8c858c2fa38c0d6aed" +
+									"2e6318194420dd1a1137445d13e1c97a" +
+									"b4789617a4e08925f46f867b72e3a4dc" +
+									"1f08cb870b2b0717f7207faa0ac512e6" +
+									"28a029aba7457ae63dcf3281e2162d93" +
+									"49") +
+								("a08204ba" + // cert [0] EXPLICIT
+									("308204b6" + // SEQUENCE OF
+										("308204b2" + // Certificate
+											("308203" +
+												"9aa003020102020101300d06092a8648" +
+												"86f70d010105050030818c310b300906" +
+												"035504061302494c3116301406035504" +
+												"0a130d5374617274436f6d204c74642e" +
+												"312b3029060355040b13225365637572" +
+												"65204469676974616c20436572746966" +
+												"6963617465205369676e696e67313830" +
+												"360603550403132f5374617274436f6d" +
+												"20436c6173732031205072696d617279" +
+												"20496e7465726d656469617465205365" +
+												"72766572204341301e170d3037313032" +
+												"353030323330365a170d313231303233" +
+												"3030323330365a304c310b3009060355" +
+												"04061302494c31163014060355040a13" +
+												"0d5374617274436f6d204c74642e3125" +
+												"30230603550403131c5374617274436f" +
+												"6d20436c6173732031204f4353502053" +
+												"69676e657230820122300d06092a8648" +
+												"86f70d01010105000382010f00308201" +
+												"0a0282010100b9561b4c453187171780" +
+												"84e96e178df2255e18ed8d8ecc7c2b7b" +
+												"51a6c1c2e6bf0aa3603066f132fe10ae" +
+												"97b50e99fa24b83fc53dd2777496387d" +
+												"14e1c3a9b6a4933e2ac12413d085570a" +
+												"95b8147414a0bc007c7bcf222446ef7f" +
+												"1a156d7ea1c577fc5f0facdfd42eb0f5" +
+												"974990cb2f5cefebceef4d1bdc7ae5c1" +
+												"075c5a99a93171f2b0845b4ff0864e97" +
+												"3fcfe32f9d7511ff87a3e943410c90a4" +
+												"493a306b6944359340a9ca96f02b66ce" +
+												"67f028df2980a6aaee8d5d5d452b8b0e" +
+												"b93f923cc1e23fcccbdbe7ffcb114d08" +
+												"fa7a6a3c404f825d1a0e715935cf623a" +
+												"8c7b59670014ed0622f6089a9447a7a1" +
+												"9010f7fe58f84129a2765ea367824d1c" +
+												"3bb2fda308530203010001a382015c30" +
+												"820158300c0603551d130101ff040230" +
+												"00300b0603551d0f0404030203a8301e" +
+												"0603551d250417301506082b06010505" +
+												"07030906092b0601050507300105301d" +
+												"0603551d0e0416041445e0a36695414c" +
+												"5dd449bc00e33cdcdbd2343e173081a8" +
+												"0603551d230481a030819d8014eb4234" +
+												"d098b0ab9ff41b6b08f7cc642eef0e2c" +
+												"45a18181a47f307d310b300906035504" +
+												"061302494c31163014060355040a130d" +
+												"5374617274436f6d204c74642e312b30" +
+												"29060355040b13225365637572652044" +
+												"69676974616c20436572746966696361" +
+												"7465205369676e696e67312930270603" +
+												"55040313205374617274436f6d204365" +
+												"7274696669636174696f6e2041757468" +
+												"6f7269747982010a30230603551d1204" +
+												"1c301a8618687474703a2f2f7777772e" +
+												"737461727473736c2e636f6d2f302c06" +
+												"096086480186f842010d041f161d5374" +
+												"617274436f6d205265766f636174696f" +
+												"6e20417574686f72697479300d06092a" +
+												"864886f70d0101050500038201010018" +
+												"2d22158f0fc0291324fa8574c49bb8ff" +
+												"2835085adcbf7b7fc4191c397ab69513" +
+												"28253fffe1e5ec2a7da0d50fca1a404e" +
+												"6968481366939e666c0a6209073eca57" +
+												"973e2fefa9ed1718e8176f1d85527ff5" +
+												"22c08db702e3b2b180f1cbff05d98128" +
+												"252cf0f450f7dd2772f4188047f19dc8" +
+												"5317366f94bc52d60f453a550af58e30" +
+												"8aaab00ced33040b62bf37f5b1ab2a4f" +
+												"7f0f80f763bf4d707bc8841d7ad9385e" +
+												"e2a4244469260b6f2bf085977af90747" +
+												"96048ecc2f9d48a1d24ce16e41a99415" +
+												"68fec5b42771e118f16c106a54ccc339" +
+												"a4b02166445a167902e75e6d8620b082" +
+												"5dcd18a069b90fd851d10fa8effd409d" +
+												"eec02860d26d8d833f304b10669b42"))))))))),
+			want: Response{
+				Status:             Good,
+				SerialNumber:       big.NewInt(119034),
+				ProducedAt:         time.Date(2010, 7, 7, 17, 35, 17, 00, time.UTC),
+				ThisUpdate:         time.Date(2010, 7, 7, 15, 1, 5, 00, time.UTC),
+				NextUpdate:         time.Date(2010, 7, 7, 18, 35, 17, 00, time.UTC),
+				SignatureAlgorithm: x509.SHA1WithRSA,
+				IssuerHash:         crypto.SHA1,
+			},
+		},
+		{
+			desc: "revoked-cert", // For https://revoked.badssl.com
+			in: ("308201e6" + // OCSPResponse SEQUENCE
+				"0a0100" + // responseStatus ENUMERATED = successful(0)
+				("a08201df" + // responseBytes [0] EXPLICIT
+					("308201db" + // ResponseBytes SEQUENCE
+						"0609" + "2b0601050507300101" + // responseType OID = 1.3.6.1.5.5.7.48.1.1 = Basic Response
+						("048201cc" + // response OCTET STRING
+							("308201c8" + // BasicOCSPResponse SEQUENCE
+								("3081b1" + // tbsResponseData ResponseData SEQUENCE
+									("a216" + // responderID byKey [2]
+										("0414" + // KeyHash OCTETSTRING
+											"0f80611c823161d52f28e78d4638b42ce1c6d9e2")) +
+									("180f" + // producedAt GeneralizedTime
+										"32303137313231393036353035325a") +
+									("308185" + // SEQUENCE OF SingleResponse
+										("308182" + // SingleResponse SEQUENCE
+											("3049" + // CertID SEQUENCE
+												("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+													"0605" + "2b0e03021a" + // OID: 1.3.14.3.2.26 (sha1)
+													"0500") + // NULL
+												("0414" + // issuerNameHash OCTET STRING
+													"105fa67a80089db5279f35ce830b43889ea3c70d") +
+												("0414" + // issuerKeyHash OCTET STRING
+													"0f80611c823161d52f28e78d4638b42ce1c6d9e2") +
+												("0210" + // certificateSerialNumber INTEGER
+													"01af1efbdd5eae0952320b24fe6b5568")) +
+											("a111" + // certStatus CHOICE = [1] revoked SEQUENCE
+												("180f" + // revocationTime GeneralizedTime
+													"32303136303930323231323834385a")) +
+											("180f" + //  thisUpdate GeneralizedTime
+												"32303137313231393036353035325a") +
+											("a011" + // nextUpdate EXPLICIT[0]
+												("180f" + // GeneralizedTime
+													"32303137313232363036303535325a")))) +
+									("300d" +
+										"0609" + "2a864886f70d01010b" + // OID: 1.2.840.113549.1.1.11 sha256-with-rsa-signature
+										"0500") + // NULL
+									("03820101" + // signature BIT STRING
+										"006c606b22a409123831ef30fc07e9a7" +
+										"f70181b54cf01f743cc32c4da7dbf186" +
+										"f22bae20dc721b20c869d9efb90e13c8" +
+										"f7ab4fac4e70585626d9ea7689116fdc" +
+										"15aba4e1b41a8eda2149db41b5e29f77" +
+										"0d40006ed1eb7016385dca56c1acb355" +
+										"b175031e846e6919002c1cf5177f285e" +
+										"3f594c0a6b4c0cdce3fa739db89306cf" +
+										"0255e6fbb24b86e5fa173d81af42e124" +
+										"fd4efb92cfc4be09414a3e06dcfc98ea" +
+										"9951c9e84d8ada1a995c7fb1c9b39237" +
+										"2d8df14069aecce4845bd0760827e7de" +
+										"06d7024bb9a6552a30506cc89e404322" +
+										"c2fc05b0b42f28f975f44ca0da8c90e4" +
+										"79f4ead03f90e8c7471a3130a82733b0" +
+										"cb47c33a082e16f4a1503f66a3e7a59f" +
+										"42"))))))),
+			want: Response{
+				Status:             Revoked,
+				SerialNumber:       new(big.Int).SetBytes(fromHex("01af1efbdd5eae0952320b24fe6b5568")),
+				ProducedAt:         time.Date(2017, 12, 19, 6, 50, 52, 00, time.UTC),
+				ThisUpdate:         time.Date(2017, 12, 19, 6, 50, 52, 00, time.UTC),
+				NextUpdate:         time.Date(2017, 12, 26, 6, 05, 52, 00, time.UTC),
+				SignatureAlgorithm: x509.SHA256WithRSA,
+				IssuerHash:         crypto.SHA1,
+			},
+		},
+		{
+			desc: "trailing data",
+			in: ("308201e6" + // OCSPResponse SEQUENCE
+				"0a0100" + // responseStatus ENUMERATED = successful(0)
+				("a08201df" + // responseBytes [0] EXPLICIT
+					("308201db" + // ResponseBytes SEQUENCE
+						"0609" + "2b0601050507300101" + // responseType OID = 1.3.6.1.5.5.7.48.1.1 = Basic Response
+						("048201cc" + // response OCTET STRING
+							("308201c8" + // BasicOCSPResponse SEQUENCE
+								("3081b1" + // tbsResponseData ResponseData SEQUENCE
+									("a216" + // responderID byKey [2]
+										("0414" + // KeyHash OCTETSTRING
+											"0f80611c823161d52f28e78d4638b42ce1c6d9e2")) +
+									("180f" + // producedAt GeneralizedTime
+										"32303137313231393036353035325a") +
+									("308185" + // SEQUENCE OF SingleResponse
+										("308182" + // SingleResponse SEQUENCE
+											("3049" + // CertID SEQUENCE
+												("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+													"0605" + "2b0e03021a" + // OID: 1.3.14.3.2.26 (sha1)
+													"0500") + // NULL
+												("0414" + // issuerNameHash OCTET STRING
+													"105fa67a80089db5279f35ce830b43889ea3c70d") +
+												("0414" + // issuerKeyHash OCTET STRING
+													"0f80611c823161d52f28e78d4638b42ce1c6d9e2") +
+												("0210" + // certificateSerialNumber INTEGER
+													"01af1efbdd5eae0952320b24fe6b5568")) +
+											("a111" + // certStatus CHOICE = [1] revoked SEQUENCE
+												("180f" + // revocationTime GeneralizedTime
+													"32303136303930323231323834385a")) +
+											("180f" + //  thisUpdate GeneralizedTime
+												"32303137313231393036353035325a") +
+											("a011" + // nextUpdate EXPLICIT[0]
+												("180f" + // GeneralizedTime
+													"32303137313232363036303535325a")))) +
+									("300d" +
+										"0609" + "2a864886f70d01010b" + // OID: 1.2.840.113549.1.1.11 sha256-with-rsa-signature
+										"0500") + // NULL
+									("03820101" + // signature BIT STRING
+										"006c606b22a409123831ef30fc07e9a7" +
+										"f70181b54cf01f743cc32c4da7dbf186" +
+										"f22bae20dc721b20c869d9efb90e13c8" +
+										"f7ab4fac4e70585626d9ea7689116fdc" +
+										"15aba4e1b41a8eda2149db41b5e29f77" +
+										"0d40006ed1eb7016385dca56c1acb355" +
+										"b175031e846e6919002c1cf5177f285e" +
+										"3f594c0a6b4c0cdce3fa739db89306cf" +
+										"0255e6fbb24b86e5fa173d81af42e124" +
+										"fd4efb92cfc4be09414a3e06dcfc98ea" +
+										"9951c9e84d8ada1a995c7fb1c9b39237" +
+										"2d8df14069aecce4845bd0760827e7de" +
+										"06d7024bb9a6552a30506cc89e404322" +
+										"c2fc05b0b42f28f975f44ca0da8c90e4" +
+										"79f4ead03f90e8c7471a3130a82733b0" +
+										"cb47c33a082e16f4a1503f66a3e7a59f" +
+										"42")))))) + "ff"),
+			wantErr: "trailing data",
+		},
+		{
+			desc: "invalid response type",
+			in: ("308201e6" + // OCSPResponse SEQUENCE
+				"0a0100" + // responseStatus ENUMERATED = successful(0)
+				("a08201df" + // responseBytes [0] EXPLICIT
+					("308201db" + // ResponseBytes SEQUENCE
+						"0609" + "2b0601050507300102" + // responseType OID = 1.3.6.1.5.5.7.48.1.2 = ???
+						("048201cc" + // response OCTET STRING
+							("308201c8" + // BasicOCSPResponse SEQUENCE
+								("3081b1" + // tbsResponseData ResponseData SEQUENCE
+									("a216" + // responderID byKey [2]
+										("0414" + // KeyHash OCTETSTRING
+											"0f80611c823161d52f28e78d4638b42ce1c6d9e2")) +
+									("180f" + // producedAt GeneralizedTime
+										"32303137313231393036353035325a") +
+									("308185" + // SEQUENCE OF SingleResponse
+										("308182" + // SingleResponse SEQUENCE
+											("3049" + // CertID SEQUENCE
+												("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+													"0605" + "2b0e03021a" + // OID: 1.3.14.3.2.26 (sha1)
+													"0500") + // NULL
+												("0414" + // issuerNameHash OCTET STRING
+													"105fa67a80089db5279f35ce830b43889ea3c70d") +
+												("0414" + // issuerKeyHash OCTET STRING
+													"0f80611c823161d52f28e78d4638b42ce1c6d9e2") +
+												("0210" + // certificateSerialNumber INTEGER
+													"01af1efbdd5eae0952320b24fe6b5568")) +
+											("a111" + // certStatus CHOICE = [1] revoked SEQUENCE
+												("180f" + // revocationTime GeneralizedTime
+													"32303136303930323231323834385a")) +
+											("180f" + //  thisUpdate GeneralizedTime
+												"32303137313231393036353035325a") +
+											("a011" + // nextUpdate EXPLICIT[0]
+												("180f" + // GeneralizedTime
+													"32303137313232363036303535325a")))) +
+									("300d" +
+										"0609" + "2a864886f70d01010b" + // OID: 1.2.840.113549.1.1.11 sha256-with-rsa-signature
+										"0500") + // NULL
+									("03820101" + // signature BIT STRING
+										"006c606b22a409123831ef30fc07e9a7" +
+										"f70181b54cf01f743cc32c4da7dbf186" +
+										"f22bae20dc721b20c869d9efb90e13c8" +
+										"f7ab4fac4e70585626d9ea7689116fdc" +
+										"15aba4e1b41a8eda2149db41b5e29f77" +
+										"0d40006ed1eb7016385dca56c1acb355" +
+										"b175031e846e6919002c1cf5177f285e" +
+										"3f594c0a6b4c0cdce3fa739db89306cf" +
+										"0255e6fbb24b86e5fa173d81af42e124" +
+										"fd4efb92cfc4be09414a3e06dcfc98ea" +
+										"9951c9e84d8ada1a995c7fb1c9b39237" +
+										"2d8df14069aecce4845bd0760827e7de" +
+										"06d7024bb9a6552a30506cc89e404322" +
+										"c2fc05b0b42f28f975f44ca0da8c90e4" +
+										"79f4ead03f90e8c7471a3130a82733b0" +
+										"cb47c33a082e16f4a1503f66a3e7a59f" +
+										"42"))))))),
+			wantErr: "bad OCSP response type",
+		},
+		{
+			desc:    "invalid ASN1",
+			in:      "0000",
+			wantErr: "asn1: structure error",
+		},
+		{
+			desc: "invalid inner ASN1",
+			in: ("3016" + // OCSPResponse SEQUENCE
+				"0a0100" + // responseStatus ENUMERATED = successful(0)
+				("a011" + // responseBytes [0] EXPLICIT
+					("300f" + // ResponseBytes SEQUENCE
+						"0609" + "2b0601050507300101" + // responseType OID = 1.3.6.1.5.5.7.48.1.1 = Basic Response
+						("0402" + // response OCTET STRING
+							"0000")))), // <invalid>
+			wantErr: "asn1: structure error",
+		},
+		{
+			desc: "multiple responses",
+			in: ("3082026d" + // OCSPResponse SEQUENCE
+				"0a0100" + // responseStatus ENUMERATED = successful(0)
+				("a0820266" + // responseBytes [0] EXPLICIT
+					("30820262" + // ResponseBytes SEQUENCE
+						"0609" + "2b0601050507300101" + // responseType OID = 1.3.6.1.5.5.7.48.1.1 = Basic Response
+						("04820253" + // response OCTET STRING
+							("3082024f" + // BasicOCSPResponse SEQUENCE
+								("30820137" + // tbsResponseData ResponseData SEQUENCE
+									("a216" + // responderID byKey [2]
+										("0414" + // KeyHash OCTETSTRING
+											"0f80611c823161d52f28e78d4638b42ce1c6d9e2")) +
+									("180f" + // producedAt GeneralizedTime
+										"32303137313231393036353035325a") +
+									("3082010a" + // SEQUENCE OF SingleResponse
+										("308182" + // SingleResponse SEQUENCE
+											("3049" + // CertID SEQUENCE
+												("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+													"0605" + "2b0e03021a" + // OID: 1.3.14.3.2.26 (sha1)
+													"0500") + // NULL
+												("0414" + // issuerNameHash OCTET STRING
+													"105fa67a80089db5279f35ce830b43889ea3c70d") +
+												("0414" + // issuerKeyHash OCTET STRING
+													"0f80611c823161d52f28e78d4638b42ce1c6d9e2") +
+												("0210" + // certificateSerialNumber INTEGER
+													"01af1efbdd5eae0952320b24fe6b5568")) +
+											("a111" + // certStatus CHOICE = [1] revoked SEQUENCE
+												("180f" + // revocationTime GeneralizedTime
+													"32303136303930323231323834385a")) +
+											("180f" + //  thisUpdate GeneralizedTime
+												"32303137313231393036353035325a") +
+											("a011" + // nextUpdate EXPLICIT[0]
+												("180f" + // GeneralizedTime
+													"32303137313232363036303535325a"))) +
+										("308182" + // SingleResponse SEQUENCE
+											("3049" + // CertID SEQUENCE
+												("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+													"0605" + "2b0e03021a" + // OID: 1.3.14.3.2.26 (sha1)
+													"0500") + // NULL
+												("0414" + // issuerNameHash OCTET STRING
+													"105fa67a80089db5279f35ce830b43889ea3c70d") +
+												("0414" + // issuerKeyHash OCTET STRING
+													"0f80611c823161d52f28e78d4638b42ce1c6d9e2") +
+												("0210" + // certificateSerialNumber INTEGER
+													"01af1efbdd5eae0952320b24fe6b5568")) +
+											("a111" + // certStatus CHOICE = [1] revoked SEQUENCE
+												("180f" + // revocationTime GeneralizedTime
+													"32303136303930323231323834385a")) +
+											("180f" + //  thisUpdate GeneralizedTime
+												"32303137313231393036353035325a") +
+											("a011" + // nextUpdate EXPLICIT[0]
+												("180f" + // GeneralizedTime
+													"32303137313232363036303535325a")))) +
+									("300d" +
+										"0609" + "2a864886f70d01010b" + // OID: 1.2.840.113549.1.1.11 sha256-with-rsa-signature
+										"0500") + // NULL
+									("03820101" + // signature BIT STRING
+										"006c606b22a409123831ef30fc07e9a7" +
+										"f70181b54cf01f743cc32c4da7dbf186" +
+										"f22bae20dc721b20c869d9efb90e13c8" +
+										"f7ab4fac4e70585626d9ea7689116fdc" +
+										"15aba4e1b41a8eda2149db41b5e29f77" +
+										"0d40006ed1eb7016385dca56c1acb355" +
+										"b175031e846e6919002c1cf5177f285e" +
+										"3f594c0a6b4c0cdce3fa739db89306cf" +
+										"0255e6fbb24b86e5fa173d81af42e124" +
+										"fd4efb92cfc4be09414a3e06dcfc98ea" +
+										"9951c9e84d8ada1a995c7fb1c9b39237" +
+										"2d8df14069aecce4845bd0760827e7de" +
+										"06d7024bb9a6552a30506cc89e404322" +
+										"c2fc05b0b42f28f975f44ca0da8c90e4" +
+										"79f4ead03f90e8c7471a3130a82733b0" +
+										"cb47c33a082e16f4a1503f66a3e7a59f" +
+										"42"))))))),
+			wantErr: "bad number of responses",
+		},
+		{
+			desc: "invalid responderID byHash contents",
+			in: ("308201e6" + // OCSPResponse SEQUENCE
+				"0a0100" + // responseStatus ENUMERATED = successful(0)
+				("a08201df" + // responseBytes [0] EXPLICIT
+					("308201db" + // ResponseBytes SEQUENCE
+						"0609" + "2b0601050507300101" + // responseType OID = 1.3.6.1.5.5.7.48.1.1 = Basic Response
+						("048201cc" + // response OCTET STRING
+							("308201c8" + // BasicOCSPResponse SEQUENCE
+								("3081b1" + // tbsResponseData ResponseData SEQUENCE
+									("a216" + // responderID byHash [2]
+										("0000" + "0f80611c823161d52f28e78d4638b42ce1c6d9e2")) +
+									("180f" + // producedAt GeneralizedTime
+										"32303137313231393036353035325a") +
+									("308185" + // SEQUENCE OF SingleResponse
+										("308182" + // SingleResponse SEQUENCE
+											("3049" + // CertID SEQUENCE
+												("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+													"0605" + "2b0e03021a" + // OID: 1.3.14.3.2.26 (sha1)
+													"0500") + // NULL
+												("0414" + // issuerNameHash OCTET STRING
+													"105fa67a80089db5279f35ce830b43889ea3c70d") +
+												("0414" + // issuerKeyHash OCTET STRING
+													"0f80611c823161d52f28e78d4638b42ce1c6d9e2") +
+												("0210" + // certificateSerialNumber INTEGER
+													"01af1efbdd5eae0952320b24fe6b5568")) +
+											("a111" + // certStatus CHOICE = [1] revoked SEQUENCE
+												("180f" + // revocationTime GeneralizedTime
+													"32303136303930323231323834385a")) +
+											("180f" + //  thisUpdate GeneralizedTime
+												"32303137313231393036353035325a") +
+											("a011" + // nextUpdate EXPLICIT[0]
+												("180f" + // GeneralizedTime
+													"32303137313232363036303535325a")))) +
+									("300d" +
+										"0609" + "2a864886f70d01010b" + // OID: 1.2.840.113549.1.1.11 sha256-with-rsa-signature
+										"0500") + // NULL
+									("03820101" + // signature BIT STRING
+										"006c606b22a409123831ef30fc07e9a7" +
+										"f70181b54cf01f743cc32c4da7dbf186" +
+										"f22bae20dc721b20c869d9efb90e13c8" +
+										"f7ab4fac4e70585626d9ea7689116fdc" +
+										"15aba4e1b41a8eda2149db41b5e29f77" +
+										"0d40006ed1eb7016385dca56c1acb355" +
+										"b175031e846e6919002c1cf5177f285e" +
+										"3f594c0a6b4c0cdce3fa739db89306cf" +
+										"0255e6fbb24b86e5fa173d81af42e124" +
+										"fd4efb92cfc4be09414a3e06dcfc98ea" +
+										"9951c9e84d8ada1a995c7fb1c9b39237" +
+										"2d8df14069aecce4845bd0760827e7de" +
+										"06d7024bb9a6552a30506cc89e404322" +
+										"c2fc05b0b42f28f975f44ca0da8c90e4" +
+										"79f4ead03f90e8c7471a3130a82733b0" +
+										"cb47c33a082e16f4a1503f66a3e7a59f" +
+										"42"))))))),
+			wantErr: "invalid responder key hash",
+		},
+		{
+			desc: "invalid responderID CHOICE",
+			in: ("308201e6" + // OCSPResponse SEQUENCE
+				"0a0100" + // responseStatus ENUMERATED = successful(0)
+				("a08201df" + // responseBytes [0] EXPLICIT
+					("308201db" + // ResponseBytes SEQUENCE
+						"0609" + "2b0601050507300101" + // responseType OID = 1.3.6.1.5.5.7.48.1.1 = Basic Response
+						("048201cc" + // response OCTET STRING
+							("308201c8" + // BasicOCSPResponse SEQUENCE
+								("3081b1" + // tbsResponseData ResponseData SEQUENCE
+									("a316" + // responderID <invalid> [3]
+										("0414" + // KeyHash OCTETSTRING
+											"0f80611c823161d52f28e78d4638b42ce1c6d9e2")) +
+									("180f" + // producedAt GeneralizedTime
+										"32303137313231393036353035325a") +
+									("308185" + // SEQUENCE OF SingleResponse
+										("308182" + // SingleResponse SEQUENCE
+											("3049" + // CertID SEQUENCE
+												("3009" + // hashAlgorithm AlgorithmIdentifier SEQUENCE
+													"0605" + "2b0e03021a" + // OID: 1.3.14.3.2.26 (sha1)
+													"0500") + // NULL
+												("0414" + // issuerNameHash OCTET STRING
+													"105fa67a80089db5279f35ce830b43889ea3c70d") +
+												("0414" + // issuerKeyHash OCTET STRING
+													"0f80611c823161d52f28e78d4638b42ce1c6d9e2") +
+												("0210" + // certificateSerialNumber INTEGER
+													"01af1efbdd5eae0952320b24fe6b5568")) +
+											("a111" + // certStatus CHOICE = [1] revoked SEQUENCE
+												("180f" + // revocationTime GeneralizedTime
+													"32303136303930323231323834385a")) +
+											("180f" + //  thisUpdate GeneralizedTime
+												"32303137313231393036353035325a") +
+											("a011" + // nextUpdate EXPLICIT[0]
+												("180f" + // GeneralizedTime
+													"32303137313232363036303535325a")))) +
+									("300d" +
+										"0609" + "2a864886f70d01010b" + // OID: 1.2.840.113549.1.1.11 sha256-with-rsa-signature
+										"0500") + // NULL
+									("03820101" + // signature BIT STRING
+										"006c606b22a409123831ef30fc07e9a7" +
+										"f70181b54cf01f743cc32c4da7dbf186" +
+										"f22bae20dc721b20c869d9efb90e13c8" +
+										"f7ab4fac4e70585626d9ea7689116fdc" +
+										"15aba4e1b41a8eda2149db41b5e29f77" +
+										"0d40006ed1eb7016385dca56c1acb355" +
+										"b175031e846e6919002c1cf5177f285e" +
+										"3f594c0a6b4c0cdce3fa739db89306cf" +
+										"0255e6fbb24b86e5fa173d81af42e124" +
+										"fd4efb92cfc4be09414a3e06dcfc98ea" +
+										"9951c9e84d8ada1a995c7fb1c9b39237" +
+										"2d8df14069aecce4845bd0760827e7de" +
+										"06d7024bb9a6552a30506cc89e404322" +
+										"c2fc05b0b42f28f975f44ca0da8c90e4" +
+										"79f4ead03f90e8c7471a3130a82733b0" +
+										"cb47c33a082e16f4a1503f66a3e7a59f" +
+										"42"))))))),
+			wantErr: "invalid responder id tag",
+		},
+	}
+	for _, test := range tests {
+		data, _ := hex.DecodeString(test.in)
+		got, err := ParseResponse(data, nil)
+		if err != nil {
+			if test.wantErr == "" {
+				t.Errorf("ParseResponse(%s)=nil,%v; want _,nil", test.desc, err)
+			} else if !strings.Contains(err.Error(), test.wantErr) {
+				t.Errorf("ParseResponse(%s)=nil,%v; want _,err containing %q", test.desc, err, test.wantErr)
+			}
+			continue
+		}
+		if test.wantErr != "" {
+			t.Errorf("ParseResponse(%s)=%+v,nil; want nil, err containing %q", test.desc, got, test.wantErr)
+			continue
+		}
+		// Only check key fields so the test data isn't too voluminous.
+		if got.Status != test.want.Status {
+			t.Errorf("ParseResponse(%s).Status=%v; want %v", test.desc, got.Status, test.want.Status)
+		}
+		if got.SerialNumber.Cmp(test.want.SerialNumber) != 0 {
+			t.Errorf("ParseResponse(%s).SerialNumber=%v; want %v", test.desc, got.SerialNumber, test.want.SerialNumber)
+		}
+		if !got.ProducedAt.Equal(test.want.ProducedAt) {
+			t.Errorf("ParseResponse(%s).ProducedAt=%v; want %v", test.desc, got.ProducedAt, test.want.ProducedAt)
+		}
+		if !got.ThisUpdate.Equal(test.want.ThisUpdate) {
+			t.Errorf("ParseResponse(%s).ThisUpdate=%v; want %v", test.desc, got.ThisUpdate, test.want.ThisUpdate)
+		}
+		if !got.NextUpdate.Equal(test.want.NextUpdate) {
+			t.Errorf("ParseResponse(%s).NextUpdate=%v; want %v", test.desc, got.NextUpdate, test.want.NextUpdate)
+		}
+		if got.SignatureAlgorithm != test.want.SignatureAlgorithm {
+			t.Errorf("ParseResponse(%s).SignatureAlgorithm=%v; want %v", test.desc, got.SignatureAlgorithm, test.want.SignatureAlgorithm)
+		}
+		if got.IssuerHash != test.want.IssuerHash {
+			t.Errorf("ParseResponse(%s).IssuerHash=%v; want %v", test.desc, got.IssuerHash, test.want.IssuerHash)
+		}
 	}
 }
 
@@ -321,8 +1047,11 @@ func TestErrorResponse(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ResponseError from ParseResponse but got %#v", err)
 	}
+	if got, want := respErr.Error(), "ocsp: error from server: malformed"; got != want {
+		t.Errorf("ResponseError.Error()=%q, want %q", got, want)
+	}
 	if respErr.Status != Malformed {
-		t.Fatalf("expected Malformed status from ParseResponse but got %d", respErr.Status)
+		t.Errorf("expected Malformed status from ParseResponse but got %d", respErr.Status)
 	}
 }
 
@@ -874,3 +1603,8 @@ const responderCertHex = "308202e2308201caa003020102020101300d06092a864886f70d01
 	"3a25439a94299a65a709756c7a3e568be049d5c38839"
 
 const errorResponseHex = "30030a0101"
+
+func fromHex(h string) []byte {
+	data, _ := hex.DecodeString(h)
+	return data
+}
