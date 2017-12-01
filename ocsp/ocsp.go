@@ -13,9 +13,9 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	_ "crypto/sha1"
-	_ "crypto/sha256"
-	_ "crypto/sha512"
+	_ "crypto/sha1"   // register hash function
+	_ "crypto/sha256" // register hash function
+	_ "crypto/sha512" // register hash function
 	"errors"
 	"fmt"
 	"math/big"
@@ -33,15 +33,16 @@ var idPKIXOCSPBasic = asn1.ObjectIdentifier([]int{1, 3, 6, 1, 5, 5, 7, 48, 1, 1}
 // https://tools.ietf.org/html/rfc6960#section-2.3
 type ResponseStatus int
 
+// Values for ResponseStatus from s2.3.
 const (
-	Success       ResponseStatus = 0
-	Malformed     ResponseStatus = 1
-	InternalError ResponseStatus = 2
-	TryLater      ResponseStatus = 3
-	// Status code four is unused in OCSP. See
-	// https://tools.ietf.org/html/rfc6960#section-4.2.1
+	Success           ResponseStatus = 0
+	Malformed         ResponseStatus = 1
+	InternalError     ResponseStatus = 2
+	TryLater          ResponseStatus = 3
 	SignatureRequired ResponseStatus = 5
 	Unauthorized      ResponseStatus = 6
+	// Status code four is unused in OCSP. See
+	// https://tools.ietf.org/html/rfc6960#section-4.2.1
 )
 
 func (r ResponseStatus) String() string {
