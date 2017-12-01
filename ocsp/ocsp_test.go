@@ -10,14 +10,15 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/sha1"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/asn1"
 	"encoding/hex"
 	"math/big"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/google/certificate-transparency-go/asn1"
+	"github.com/google/certificate-transparency-go/x509"
+	"github.com/google/certificate-transparency-go/x509/pkix"
 )
 
 func TestOCSPDecode(t *testing.T) {
