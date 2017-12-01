@@ -20,6 +20,7 @@
 /goshawk
 /gosmin
 /gossip_server
+/ocspcheck
 /preloader
 /scanlog
 /sctcheck
