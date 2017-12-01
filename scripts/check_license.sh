@@ -11,11 +11,20 @@ check_license() {
     return 0
   fi
 
-  # Look for "Apache License" on the file header
-  if ! head -10 "$path" | grep -q 'Apache License'; then
-    # Format: $path:$line:$message
-    echo "$path:10:license header not found"
-    return 1
+  if [[ $path == ./asn1/* ]] || [[ $path == ./x509/* ]] || [[ $path == ./ocsp/* ]]; then
+    # Look for Go project header text
+    if ! head -10 "$path" | grep -q 'governed by a BSD-style'; then
+      # Format: $path:$line:$message
+      echo "$path:10:license header not found"
+      return 1
+    fi
+  else
+    # Look for "Apache License" on the file header
+    if ! head -10 "$path" | grep -q 'Apache License'; then
+      # Format: $path:$line:$message
+      echo "$path:10:license header not found"
+      return 1
+    fi
   fi
 }
 
