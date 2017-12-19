@@ -27,7 +27,8 @@ import (
 	"github.com/google/certificate-transparency-go/x509/pkix"
 )
 
-var idPKIXOCSPBasic = asn1.ObjectIdentifier([]int{1, 3, 6, 1, 5, 5, 7, 48, 1, 1})
+// OIDResponseTypePKIXOCSPBasic is the OID used to identify an OCSP basic response.
+var OIDResponseTypePKIXOCSPBasic = asn1.ObjectIdentifier([]int{1, 3, 6, 1, 5, 5, 7, 48, 1, 1})
 
 // ResponseStatus contains the result of an OCSP request. See
 // https://tools.ietf.org/html/rfc6960#section-2.3
@@ -480,7 +481,7 @@ func ParseResponseForCert(bytes []byte, cert, issuer *x509.Certificate) (*Respon
 		return nil, ResponseError{status}
 	}
 
-	if !resp.Response.ResponseType.Equal(idPKIXOCSPBasic) {
+	if !resp.Response.ResponseType.Equal(OIDResponseTypePKIXOCSPBasic) {
 		return nil, ParseError("bad OCSP response type")
 	}
 
@@ -776,7 +777,7 @@ func CreateResponse(issuer, responderCert *x509.Certificate, template Response, 
 	return asn1.Marshal(responseASN1{
 		Status: asn1.Enumerated(Success),
 		Response: responseBytes{
-			ResponseType: idPKIXOCSPBasic,
+			ResponseType: OIDResponseTypePKIXOCSPBasic,
 			Response:     responseDER,
 		},
 	})
