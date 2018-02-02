@@ -430,6 +430,9 @@ func CertificateToString(cert *x509.Certificate) string {
 	showNameConstraints(&result, cert)
 	showCertPolicies(&result, cert)
 	showCRLDPs(&result, cert)
+	showPolicyMappings(&result, cert)
+	showPolicyConstraints(&result, cert)
+	showInhibitAnyPolicy(&result, cert)
 	showAuthInfoAccess(&result, cert)
 	showSubjectInfoAccess(&result, cert)
 	showRPKIAddressRanges(&result, cert)
@@ -588,6 +591,46 @@ func showCRLDPs(result *bytes.Buffer, cert *x509.Certificate) {
 		// TODO(drysdale): Display other GeneralNames types, plus issuer/reasons/relative-name
 	}
 
+}
+
+func showPolicyMappings(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionPolicyMappings, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Policy Mappings:"))
+		showCritical(result, critical)
+		var buf bytes.Buffer
+		for _, v := range cert.PolicyMappings {
+			commaAppend(&buf, fmt.Sprintf("%v:%v", v.IssuerPolicy, v.SubjectPolicy))
+		}
+		result.WriteString(fmt.Sprintf("                  %v\n", buf.String()))
+	}
+}
+
+func showPolicyConstraints(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionPolicyConstraints, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Policy Constraints:"))
+		showCritical(result, critical)
+		var buf bytes.Buffer
+		if cert.RequireExplicitPolicy {
+			commaAppend(&buf, fmt.Sprintf("Require Explicit Policy:%d", cert.RequireExplicitPolicySkip))
+		}
+		if cert.InhibitPolicyMapping {
+			commaAppend(&buf, fmt.Sprintf("Inhibit Policy Mapping:%d", cert.InhibitPolicyMappingSkip))
+		}
+		if buf.Len() > 0 {
+			result.WriteString(fmt.Sprintf("                %v\n", buf.String()))
+		}
+	}
+}
+
+func showInhibitAnyPolicy(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionInhibitAnyPolicy, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Inhibit Any Policy:"))
+		showCritical(result, critical)
+		result.WriteString(fmt.Sprintf("                %d\n", cert.InhibitAnyPolicySkip))
+	}
 }
 
 func showAuthInfoAccess(result *bytes.Buffer, cert *x509.Certificate) {
@@ -799,6 +842,9 @@ func oidAlreadyPrinted(oid asn1.ObjectIdentifier) bool {
 		oid.Equal(x509.OIDExtensionCertificatePolicies) ||
 		oid.Equal(x509.OIDExtensionNameConstraints) ||
 		oid.Equal(x509.OIDExtensionCRLDistributionPoints) ||
+		oid.Equal(x509.OIDExtensionInhibitAnyPolicy) ||
+		oid.Equal(x509.OIDExtensionPolicyConstraints) ||
+		oid.Equal(x509.OIDExtensionPolicyMappings) ||
 		oid.Equal(x509.OIDExtensionAuthorityInfoAccess) ||
 		oid.Equal(x509.OIDExtensionSubjectInfoAccess) ||
 		oid.Equal(x509.OIDExtensionIPPrefixList) ||
