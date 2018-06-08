@@ -31,9 +31,10 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/google/certificate-transparency-go"
+	ct "github.com/google/certificate-transparency-go"
 	"github.com/google/certificate-transparency-go/ctutil"
 	"github.com/google/certificate-transparency-go/loglist"
+	"github.com/google/certificate-transparency-go/ocsp"
 	"github.com/google/certificate-transparency-go/x509"
 	"github.com/google/certificate-transparency-go/x509util"
 )
@@ -188,6 +189,15 @@ func getAndCheckSiteChain(ctx context.Context, lf logInfoFactory, target string,
 	var valid, invalid int
 	scts := conn.ConnectionState().SignedCertificateTimestamps
 	if len(scts) > 0 {
+		ocspData := conn.ConnectionState().OCSPResponse
+		if len(ocspData) > 0 {
+			ocspRsp, err := ocsp.ParseResponse(ocspData, nil)
+			if err != nil {
+				glog.Warningf("failed to parse OCSP response: %v", err)
+			} else {
+				glog.V(2).Infof("OCSP response details\n%s", x509util.OCSPResponseToString(ocspRsp))
+			}
+		}
 		merkleLeaf, err := ct.MerkleTreeLeafFromChain(chain, ct.X509LogEntryType, 0 /* timestamp added later */)
 		if err != nil {
 			glog.Errorf("Failed to build Merkle tree leaf: %v", err)
