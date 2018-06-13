@@ -1674,6 +1674,7 @@ func makeConstraintsCACert(constraints constraintsSpec, name string, key *ecdsa.
 		KeyUsage:              KeyUsageCertSign,
 		BasicConstraintsValid: true,
 		IsCA: true,
+		PermittedDNSDomainsCritical: true,
 	}
 
 	if err := addConstraintsToTemplate(constraints, template); err != nil {

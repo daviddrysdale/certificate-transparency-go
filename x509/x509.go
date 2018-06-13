@@ -856,7 +856,9 @@ type Certificate struct {
 	URIs           []*url.URL
 
 	// Name constraints
-	PermittedDNSDomainsCritical bool // if true then the name constraints are marked critical.
+	// PermittedDNSDomainsCritical indicates whether the name constraints are
+	// marked critical (which they should be according to RFC 5280, 4.2.1.10).
+	PermittedDNSDomainsCritical bool
 	PermittedDNSDomains         []string
 	ExcludedDNSDomains          []string
 	PermittedIPRanges           []*net.IPNet
