@@ -51,11 +51,12 @@ func marshalECPrivateKeyWithOID(key *ecdsa.PrivateKey, oid asn1.ObjectIdentifier
 	paddedPrivateKey := make([]byte, (key.Curve.Params().N.BitLen()+7)/8)
 	copy(paddedPrivateKey[len(paddedPrivateKey)-len(privateKeyBytes):], privateKeyBytes)
 
+	data := elliptic.Marshal(key.Curve, key.X, key.Y)
 	return asn1.Marshal(ecPrivateKey{
 		Version:       1,
 		PrivateKey:    paddedPrivateKey,
 		NamedCurveOID: oid,
-		PublicKey:     asn1.BitString{Bytes: elliptic.Marshal(key.Curve, key.X, key.Y)},
+		PublicKey:     asn1.BitString{Bytes: data, BitLength: 8 * len(data)},
 	})
 }
 

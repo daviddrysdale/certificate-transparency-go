@@ -2199,13 +2199,7 @@ func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId 
 		a[0] = reverseBitsInAByte(byte(template.KeyUsage))
 		a[1] = reverseBitsInAByte(byte(template.KeyUsage >> 8))
 
-		l := 1
-		if a[1] != 0 {
-			l = 2
-		}
-
-		bitString := a[:l]
-		ret[n].Value, err = asn1.Marshal(asn1.BitString{Bytes: bitString, BitLength: asn1.BitLength(bitString)})
+		ret[n].Value, err = asn1.MarshalWithParams(asn1.BitString{Bytes: a[:], BitLength: asn1.BitLength(a[:])}, "bitset")
 		if err != nil {
 			return
 		}
