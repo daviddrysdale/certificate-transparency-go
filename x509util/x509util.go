@@ -416,6 +416,14 @@ func CertificateToString(cert *x509.Certificate) string {
 	result.WriteString(fmt.Sprintf("        Subject Public Key Info:\n"))
 	result.WriteString(fmt.Sprintf("            Public Key Algorithm: %v\n", publicKeyAlgorithmToString(cert.PublicKeyAlgorithm)))
 	result.WriteString(fmt.Sprintf("%v\n", publicKeyToString(cert.PublicKeyAlgorithm, cert.PublicKey)))
+	if cert.IssuerUniqueId.BitLength > 0 {
+		result.WriteString(fmt.Sprintf("        Issuer Unique ID:\n"))
+		result.WriteString(fmt.Sprintf("            %v\n", bitStringToString(cert.IssuerUniqueId)))
+	}
+	if cert.SubjectUniqueId.BitLength > 0 {
+		result.WriteString(fmt.Sprintf("        Subject Unique ID:\n"))
+		result.WriteString(fmt.Sprintf("            %v\n", bitStringToString(cert.SubjectUniqueId)))
+	}
 
 	if len(cert.Extensions) > 0 {
 		result.WriteString(fmt.Sprintf("        X509v3 extensions:\n"))
