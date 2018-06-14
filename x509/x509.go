@@ -2704,6 +2704,7 @@ var emptyASN1Subject = []byte{0x30, 0}
 //    - RequireExplicitPolicy, RequireExplicitPolicySkip, InhibitPolicyMapping, InhibitPolicyMappingSkip
 //    - InhibitAnyPolicy, InhibitAnyPolicySkip
 //    - PolicyMappings
+//    - CRLDistributionPoints
 //    - RawSCT, SCTList
 //    - ExtraExtensions
 //
