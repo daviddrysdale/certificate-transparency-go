@@ -442,6 +442,7 @@ func CertificateToString(cert *x509.Certificate) string {
 	showPolicyMappings(&result, cert)
 	showPolicyConstraints(&result, cert)
 	showInhibitAnyPolicy(&result, cert)
+	showSubjectDirectoryAttributes(&result, cert)
 	showAuthInfoAccess(&result, cert)
 	showSubjectInfoAccess(&result, cert)
 	showRPKIAddressRanges(&result, cert)
@@ -662,6 +663,21 @@ func showInhibitAnyPolicy(result *bytes.Buffer, cert *x509.Certificate) {
 	}
 }
 
+func showSubjectDirectoryAttributes(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionSubjectDirectoryAttributes, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Subject Directory Attributes:"))
+		showCritical(result, critical)
+		for _, attr := range cert.SubjectDirectoryAttributes {
+			var buf bytes.Buffer
+			for _, s := range attr.Values {
+				commaAppend(&buf, hex.EncodeToString(s.FullBytes))
+			}
+			result.WriteString(fmt.Sprintf("                %v: %s\n", attributeOIDToString(attr.Type), buf.String()))
+		}
+	}
+}
+
 func showAuthInfoAccess(result *bytes.Buffer, cert *x509.Certificate) {
 	count, critical := OIDInExtensions(x509.OIDExtensionAuthorityInfoAccess, cert.Extensions)
 	if count > 0 {
@@ -871,6 +887,7 @@ func oidAlreadyPrinted(oid asn1.ObjectIdentifier) bool {
 		oid.Equal(x509.OIDExtensionCertificatePolicies) ||
 		oid.Equal(x509.OIDExtensionNameConstraints) ||
 		oid.Equal(x509.OIDExtensionCRLDistributionPoints) ||
+		oid.Equal(x509.OIDExtensionSubjectDirectoryAttributes) ||
 		oid.Equal(x509.OIDExtensionInhibitAnyPolicy) ||
 		oid.Equal(x509.OIDExtensionPolicyConstraints) ||
 		oid.Equal(x509.OIDExtensionPolicyMappings) ||
