@@ -438,6 +438,7 @@ func CertificateToString(cert *x509.Certificate) string {
 	showNameConstraints(&result, cert)
 	showCertPolicies(&result, cert)
 	showCRLDPs(&result, cert)
+	showFreshestCRL(&result, cert)
 	showPolicyMappings(&result, cert)
 	showPolicyConstraints(&result, cert)
 	showInhibitAnyPolicy(&result, cert)
@@ -604,7 +605,21 @@ func showCRLDPs(result *bytes.Buffer, cert *x509.Certificate) {
 		result.WriteString(fmt.Sprintf("                    %v\n", buf.String()))
 		// TODO(drysdale): Display other GeneralNames types, plus issuer/reasons/relative-name
 	}
+}
 
+func showFreshestCRL(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionFreshestCRL, cert.Extensions)
+	if count > 0 {
+		// TODO(drysdale): Commonize with CRLDistributionPoints
+		result.WriteString(fmt.Sprintf("            X509v3 Freshest CRL:"))
+		showCritical(result, critical)
+		result.WriteString(fmt.Sprintf("                Full Name:\n"))
+		var buf bytes.Buffer
+		for _, pt := range cert.FreshestCRL {
+			commaAppend(&buf, "URI:"+pt)
+		}
+		result.WriteString(fmt.Sprintf("                    %v\n", buf.String()))
+	}
 }
 
 func showPolicyMappings(result *bytes.Buffer, cert *x509.Certificate) {
@@ -860,6 +875,7 @@ func oidAlreadyPrinted(oid asn1.ObjectIdentifier) bool {
 		oid.Equal(x509.OIDExtensionPolicyConstraints) ||
 		oid.Equal(x509.OIDExtensionPolicyMappings) ||
 		oid.Equal(x509.OIDExtensionAuthorityInfoAccess) ||
+		oid.Equal(x509.OIDExtensionFreshestCRL) ||
 		oid.Equal(x509.OIDExtensionSubjectInfoAccess) ||
 		oid.Equal(x509.OIDExtensionIPPrefixList) ||
 		oid.Equal(x509.OIDExtensionASList) ||
