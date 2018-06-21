@@ -7,6 +7,7 @@ package x509
 import (
 	"fmt"
 	"net"
+	"net/url"
 
 	"github.com/google/certificate-transparency-go/asn1"
 	"github.com/google/certificate-transparency-go/x509/pkix"
@@ -40,7 +41,7 @@ type GeneralNames struct {
 	DNSNames       []string
 	EmailAddresses []string
 	DirectoryNames []pkix.Name
-	URIs           []string
+	URIs           []*url.URL
 	IPNets         []net.IPNet
 	RegisteredIDs  []asn1.ObjectIdentifier
 	OtherNames     []OtherName
@@ -132,7 +133,16 @@ func parseGeneralName(data []byte, gname *GeneralNames, withMask bool) ([]byte, 
 		dirName.FillFromRDNSequence(&rdnSeq)
 		gname.DirectoryNames = append(gname.DirectoryNames, dirName)
 	case tagURI:
-		gname.URIs = append(gname.URIs, string(v.Bytes))
+		uri, err := url.Parse(string(v.Bytes))
+		if err != nil {
+			return nil, fmt.Errorf("x509: cannot parse URI %q: %s", string(v.Bytes), err)
+		}
+		if len(uri.Host) > 0 {
+			if _, ok := domainToReverseLabels(uri.Host); !ok {
+				return nil, fmt.Errorf("x509: cannot parse URI %q: invalid domain", string(v.Bytes))
+			}
+		}
+		gname.URIs = append(gname.URIs, uri)
 	case tagIPAddress:
 		vlen := len(v.Bytes)
 		if withMask {

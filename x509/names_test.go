@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"net"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,6 +19,10 @@ import (
 )
 
 func TestParseGeneralNames(t *testing.T) {
+	u, err := url.Parse("www.google.co.uk")
+	if err != nil {
+		t.Fatalf("failed to parse hard-coded test data: %v", err)
+	}
 	var tests = []struct {
 		data    string // as hex
 		want    GeneralNames
@@ -36,7 +41,7 @@ func TestParseGeneralNames(t *testing.T) {
 				("8610" + "7777772e676f6f676c652e636f2e756b")),
 			want: GeneralNames{
 				DNSNames: []string{"www.google.co.uk"},
-				URIs:     []string{"www.google.co.uk"},
+				URIs:     []*url.URL{u},
 			},
 		},
 		{
@@ -79,6 +84,10 @@ func TestParseGeneralNames(t *testing.T) {
 }
 
 func TestParseGeneralName(t *testing.T) {
+	u, err := url.Parse("www.google.co.uk")
+	if err != nil {
+		t.Fatalf("failed to parse hard-coded test data: %v", err)
+	}
 	var tests = []struct {
 		data     string // as hex
 		withMask bool
@@ -164,7 +173,7 @@ func TestParseGeneralName(t *testing.T) {
 		{
 			data: ("8610" + "7777772e676f6f676c652e636f2e756b"),
 			want: GeneralNames{
-				URIs: []string{"www.google.co.uk"},
+				URIs: []*url.URL{u},
 			},
 		},
 		{
