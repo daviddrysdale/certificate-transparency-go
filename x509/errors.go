@@ -34,6 +34,19 @@ const (
 	ErrTrailingRevocationInvalidityDate
 	ErrInvalidRevocationIssuer
 	ErrUnhandledCriticalRevokedCertExtension
+	ErrAsn1InvalidGeneralNames
+	ErrAsn1TrailingGeneralNames
+	ErrInvalidGeneralNamesTag
+	ErrAsn1InvalidGeneralName
+	ErrAsn1InvalidGeneralNameOther
+	ErrAsn1InvalidGeneralNameOtherNotCompound
+	ErrAsn1InvalidGeneralNameDirectory
+	ErrAsn1InvalidGeneralNameURI
+	ErrInvalidGeneralNameURI
+	ErrGeneralNameIPMaskLen
+	ErrGeneralNameIPLen
+	ErrAsn1InvalidGeneralNameOID
+	ErrInvalidGeneralNameTag
 
 	ErrMaxID
 )
@@ -276,6 +289,111 @@ var errorInfo = []Error{
 		SpecRef:  "RFC 5280 s5.3",
 		SpecText: "If a CRL contains a critical CRL entry extension that the application cannot process, then the application MUST NOT use that CRL to determine the status of any certificates.",
 		Category: MalformedCRL,
+		Fatal:    true,
+	},
+
+	{
+		ID:       ErrAsn1InvalidGeneralNames,
+		Summary:  "x509: failed to parse %s GeneralNames: %v",
+		Field:    "GeneralNames",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrAsn1TrailingGeneralNames,
+		Summary:  "x509: trailing data after %s GeneralNames",
+		Field:    "GeneralNames",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrInvalidGeneralNamesTag,
+		Summary:  "x509: invalid ASN.1 tag %d/class %d for %s GeneralNames",
+		Field:    "GeneralNames",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrAsn1InvalidGeneralName,
+		Summary:  "x509: failed to parse %s GeneralName: %v",
+		Field:    "GeneralName",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrAsn1InvalidGeneralNameOther,
+		Summary:  "x509: failed to parse %s GeneralName.otherName: %v",
+		Field:    "GeneralName.otherName",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrAsn1InvalidGeneralNameOtherNotCompound,
+		Summary:  "x509: %s GeneralName.OtherName not compound",
+		Field:    "GeneralName.otherName",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrAsn1InvalidGeneralNameDirectory,
+		Summary:  "x509: failed to parse %s GeneralName.directoryName: %v",
+		Field:    "GeneralName.directoryName",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrAsn1InvalidGeneralNameURI,
+		Summary:  "x509: failed to parse %s GeneralName.uniformResourceIdentifier %q: %v",
+		Field:    "GeneralName.uniformResourceIdentifier",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrInvalidGeneralNameURI,
+		Summary:  "x509: failed to parse %s GeneralName.uniformResourceIdentifier %q: invalid domain",
+		Field:    "GeneralName.uniformResourceIdentifier",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: MalformedCertificate,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrGeneralNameIPMaskLen,
+		Summary:  "x509: %s GeneralName.iPAddress with IP/mask address of length %d",
+		Field:    "GeneralName.ipAddress",
+		SpecRef:  "RFC5280 s4.2.1.10",
+		SpecText: "For IPv4 addresses, the iPAddress field of GeneralName MUST contain eight (8) octets...For IPv6 addresses, the iPAddress field MUST contain 32 octets",
+		Category: MalformedCertificate,
+	},
+	{
+		ID:       ErrGeneralNameIPLen,
+		Summary:  "x509: %s GeneralName.iPAddress with IP address of length %d",
+		Field:    "GeneralName.ipAddress",
+		SpecRef:  "RFC5280 s4.2.1.6",
+		SpecText: "For IP version 4, as specified in [RFC791], the octet string MUST contain exactly four octets.  For IP version 6, as specified in [RFC2460], the octet string MUST contain exactly sixteen octets",
+		Category: MalformedCertificate,
+	},
+	{
+		ID:       ErrAsn1InvalidGeneralNameOID,
+		Summary:  "x509: invalid ASN.1 OBJECT-IDENTIFIER in %s GeneralName: %v",
+		Field:    "GeneralName.registeredID",
+		SpecRef:  "RFC 5280 s4.1.2.6",
+		Category: InvalidASN1Content,
+		Fatal:    true,
+	},
+	{
+		ID:       ErrInvalidGeneralNameTag,
+		Summary:  "x509: unknown tag %d for %s GeneralName",
+		Field:    "GeneralName",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
 		Fatal:    true,
 	},
 }

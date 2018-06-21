@@ -1524,6 +1524,12 @@ func (e *NonFatalErrors) Append(more *NonFatalErrors) *NonFatalErrors {
 	return &combined
 }
 
+func (e *NonFatalErrors) copyErrs(errs *Errors) {
+	for _, err := range errs.Errs {
+		e.AddError(err)
+	}
+}
+
 // IsFatal indicates whether an error is fatal.
 func IsFatal(err error) bool {
 	if err == nil {
@@ -1993,11 +1999,15 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				}
 
 				out.AuthorityKeyId = a.Id
+				var errs Errors
 				if len(a.Issuer.FullBytes) > 0 {
-					if err := parseGeneralNamesWithTag(a.Issuer.FullBytes, asn1.ClassContextSpecific, 1, &out.AuthorityKeyIssuer); err != nil {
-						nfe.AddError(fmt.Errorf("x509: failed to parse auth key issuer: %v", err))
+					parseGeneralNamesWithTag(a.Issuer.FullBytes, "authKeyID", asn1.ClassContextSpecific, 1, &out.AuthorityKeyIssuer, &errs)
+					if errs.Fatal() {
+						return nil, errs.FirstFatal()
 					}
 				}
+				nfe.copyErrs(&errs)
+
 				out.AuthorityKeySerialNumber = a.SerialNumber
 				if len(out.AuthorityKeyId) == 0 && out.AuthorityKeySerialNumber == nil && out.AuthorityKeyIssuer.Empty() {
 					nfe.AddError(errors.New("x509: empty authority key identifier"))

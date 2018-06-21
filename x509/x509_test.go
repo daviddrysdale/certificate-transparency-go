@@ -2670,7 +2670,7 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "KeyUsageNonDER", in: "testdata/invalid/xf-ext-key-usage-wrong-der.pem", wantErr: "trailing zeros"},
 		{desc: "KeyUsageTooManyBits", in: "testdata/invalid/xf-ext-key-usage-too-long.pem", wantErr: "incorrect number of bits"},
 		{desc: "KeyUsageEmpty", in: "testdata/invalid/xf-ext-key-usage-empty.pem", wantErr: "no bits set"},
-		{desc: "AuthKeyIDIssuerInvalid", in: "testdata/invalid/xf-ext-auth-keyid-invalid-issuer.pem", wantErr: "failed to parse auth key issuer"},
+		{desc: "AuthKeyIDIssuerInvalid", in: "testdata/invalid/xf-ext-auth-keyid-invalid-issuer.pem", wantErr: "IP address of length 5"},
 		{desc: "AuthKeyIDEmpty", in: "testdata/invalid/xf-ext-auth-keyid-noid.pem", wantErr: "empty authority key identifier"},
 		{desc: "CertPoliciesDuplicate", in: "testdata/invalid/xf-ext-cert-policies-dup.pem", wantErr: "duplicate policy"},
 		{desc: "CertPoliciesUnknownAny", in: "testdata/invalid/xf-ext-cert-policies-any-qual.pem", wantErr: "unknown policy qualifier"},

@@ -46,11 +46,11 @@ func TestParseGeneralNames(t *testing.T) {
 		},
 		{
 			data:    "0a0101",
-			wantErr: "failed to parse GeneralNames sequence",
+			wantErr: "invalid ASN.1 tag",
 		},
 		{
 			data:    "0a",
-			wantErr: "failed to parse GeneralNames:",
+			wantErr: "failed to parse test GeneralNames:",
 		},
 		{
 			data:    "03000a0101",
@@ -58,18 +58,19 @@ func TestParseGeneralNames(t *testing.T) {
 		},
 		{
 			data:    ("3005" + ("8703" + "010203")),
-			wantErr: "invalid IP length",
+			wantErr: "IP address of length 3",
 		},
 	}
 	for _, test := range tests {
 		inData := fromHex(test.data)
 		var got GeneralNames
-		err := parseGeneralNames(inData, &got)
-		if err != nil {
+		var errs Errors
+		parseGeneralNames(inData, "test", &got, &errs)
+		if !errs.Empty() {
 			if test.wantErr == "" {
-				t.Errorf("parseGeneralNames(%s)=%v; want nil", test.data, err)
-			} else if !strings.Contains(err.Error(), test.wantErr) {
-				t.Errorf("parseGeneralNames(%s)=%v; want %q", test.data, err, test.wantErr)
+				t.Errorf("parseGeneralNames(%s)=%v; want nil", test.data, errs)
+			} else if !strings.Contains(errs.Error(), test.wantErr) {
+				t.Errorf("parseGeneralNames(%s)=%v; want %q", test.data, errs, test.wantErr)
 			}
 			continue
 		}
@@ -168,7 +169,7 @@ func TestParseGeneralName(t *testing.T) {
 		},
 		{
 			data:    ("8410" + "7777772e676f6f676c652e636f2e756b"),
-			wantErr: "failed to unmarshal GeneralNames.directoryName",
+			wantErr: "failed to parse test GeneralName.directoryName",
 		},
 		{
 			data: ("8610" + "7777772e676f6f676c652e636f2e756b"),
@@ -197,12 +198,12 @@ func TestParseGeneralName(t *testing.T) {
 		},
 		{
 			data:    ("8703" + "010203"),
-			wantErr: "invalid IP length",
+			wantErr: "IP address of length 3",
 		},
 		{
 			data:     ("8707" + "01020304ffffff"),
 			withMask: true,
-			wantErr:  "invalid IP/mask length",
+			wantErr:  "IP/mask address of length 7",
 		},
 		{
 			data: ("8803" + "551d0e"), // OID: subject-key-id
@@ -227,12 +228,13 @@ func TestParseGeneralName(t *testing.T) {
 	for _, test := range tests {
 		inData := fromHex(test.data)
 		var got GeneralNames
-		_, err := parseGeneralName(inData, &got, test.withMask)
-		if err != nil {
+		var errs Errors
+		parseGeneralName(inData, "test", &got, test.withMask, &errs)
+		if !errs.Empty() {
 			if test.wantErr == "" {
-				t.Errorf("parseGeneralName(%s)=%v; want nil", test.data, err)
-			} else if !strings.Contains(err.Error(), test.wantErr) {
-				t.Errorf("parseGeneralName(%s)=%v; want %q", test.data, err, test.wantErr)
+				t.Errorf("parseGeneralName(%s)=%v; want nil", test.data, errs)
+			} else if !strings.Contains(errs.Error(), test.wantErr) {
+				t.Errorf("parseGeneralName(%s)=%v; want %q", test.data, errs, test.wantErr)
 			}
 			continue
 		}
@@ -259,9 +261,9 @@ func TestParseGeneralName(t *testing.T) {
 		}
 		seqData := append([]byte{0x30, byte(len(inData))}, inData...)
 		var gotSeq GeneralNames
-		err = parseGeneralNames(seqData, &gotSeq)
-		if err != nil {
-			t.Errorf("parseGeneralNames(%x)=%v; want nil", seqData, err)
+		parseGeneralNames(seqData, "test", &gotSeq, &errs)
+		if !errs.Empty() {
+			t.Errorf("parseGeneralNames(%x)=%v; want nil", seqData, errs)
 			continue
 		}
 		if !reflect.DeepEqual(gotSeq, test.want) {
