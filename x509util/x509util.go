@@ -531,19 +531,7 @@ func showSubjectAltName(result *bytes.Buffer, cert *x509.Certificate) {
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Subject Alternative Name:"))
 		showCritical(result, critical)
-		var buf bytes.Buffer
-		for _, name := range cert.DNSNames {
-			commaAppend(&buf, "DNS:"+name)
-		}
-		for _, email := range cert.EmailAddresses {
-			commaAppend(&buf, "email:"+email)
-		}
-		for _, ip := range cert.IPAddresses {
-			commaAppend(&buf, "IP Address:"+ip.String())
-		}
-
-		result.WriteString(fmt.Sprintf("                %v\n", buf.String()))
-		// TODO(drysdale): include other name forms
+		result.WriteString(fmt.Sprintf("                  %v\n", GeneralNamesToString(&cert.AltNames)))
 	}
 }
 
