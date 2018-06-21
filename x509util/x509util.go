@@ -381,7 +381,7 @@ func GeneralNamesToString(gname *x509.GeneralNames) string {
 		commaAppend(&buf, "DirName:"+NameToString(name))
 	}
 	for _, uri := range gname.URIs {
-		commaAppend(&buf, "URI:"+uri)
+		commaAppend(&buf, fmt.Sprintf("URI:%v", uri))
 	}
 	for _, ip := range gname.IPNets {
 		if ip.Mask == nil {
