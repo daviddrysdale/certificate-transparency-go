@@ -623,7 +623,7 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 	} else if checkNameConstraints && leaf.hasSANExtension() {
 		err := forEachSAN(leaf.getSANExtension(), func(tag int, data []byte) error {
 			switch tag {
-			case nameTypeEmail:
+			case tagRFC822Name:
 				name := string(data)
 				mailbox, ok := parseRFC2821Mailbox(name)
 				if !ok {
@@ -637,7 +637,7 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 					return err
 				}
 
-			case nameTypeDNS:
+			case tagDNSName:
 				name := string(data)
 				if _, ok := domainToReverseLabels(name); !ok {
 					return fmt.Errorf("x509: cannot parse dnsName %q", name)
@@ -650,7 +650,7 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 					return err
 				}
 
-			case nameTypeURI:
+			case tagURI:
 				name := string(data)
 				uri, err := url.Parse(name)
 				if err != nil {
@@ -664,7 +664,7 @@ func (c *Certificate) isValid(certType int, currentChain []*Certificate, opts *V
 					return err
 				}
 
-			case nameTypeIP:
+			case tagIPAddress:
 				ip := net.IP(data)
 				if l := len(ip); l != net.IPv4len && l != net.IPv6len {
 					return fmt.Errorf("x509: internal error: IP SAN %x failed to parse", data)

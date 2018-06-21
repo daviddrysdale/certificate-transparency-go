@@ -1972,7 +1972,7 @@ func TestConstraintCases(t *testing.T) {
 		keys = append(keys, leafKey)
 
 		leafCert, err := makeConstraintsLeafCert(test.leaf, leafKey, parent, parentKey)
-		if err != nil {
+		if IsFatal(err) {
 			t.Fatalf("#%d: cannot create leaf: %s", i, err)
 		}
 
@@ -2199,10 +2199,12 @@ func TestBadNamesInSANs(t *testing.T) {
 	// Bad names in URI and IP SANs should not parse. Bad DNS and email SANs
 	// will parse and are tested in name constraint tests at the top of this
 	// file.
-	badNames := []string{
-		"uri:https://example.com./dsf",
-		"invalidip:0102",
-		"invalidip:0102030405",
+	tests := []struct {
+		in, wantErr string
+	}{
+		{"uri:https://example.com./dsf", "failed to parse"},
+		{"invalidip:0102", "IP address of length 2"},
+		{"invalidip:0102030405", "IP address of length 5"},
 	}
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -2210,18 +2212,16 @@ func TestBadNamesInSANs(t *testing.T) {
 		panic(err)
 	}
 
-	for _, badName := range badNames {
-		_, err := makeConstraintsLeafCert(leafSpec{sans: []string{badName}}, priv, nil, priv)
+	for _, test := range tests {
+		_, err := makeConstraintsLeafCert(leafSpec{sans: []string{test.in}}, priv, nil, priv)
 
 		if err == nil {
-			t.Errorf("bad name %q unexpectedly accepted in SAN", badName)
+			t.Errorf("bad name %q unexpectedly accepted in SAN", test.in)
 			continue
 		}
 
-		if err != nil {
-			if str := err.Error(); !strings.Contains(str, "cannot parse ") {
-				t.Errorf("bad name %q triggered unrecognised error: %s", badName, str)
-			}
+		if str := err.Error(); !strings.Contains(str, test.wantErr) {
+			t.Errorf("bad name %q triggered error: %s, want err containing %q", test.in, err, test.wantErr)
 		}
 	}
 }

@@ -123,9 +123,15 @@ func parseGeneralName(data []byte, who string, gname *GeneralNames, withMask boo
 		}
 		gname.OtherNames = append(gname.OtherNames, other)
 	case tagRFC822Name:
+		if err := isIA5String(string(v.Bytes)); err != nil {
+			errs.AddID(ErrInvalidGeneralNameEmailEncoding)
+		}
 		gname.EmailAddresses = append(gname.EmailAddresses, string(v.Bytes))
 	case tagDNSName:
 		dns := string(v.Bytes)
+		if err := isIA5String(dns); err != nil {
+			errs.AddID(ErrInvalidGeneralNameDNSEncoding)
+		}
 		gname.DNSNames = append(gname.DNSNames, dns)
 	case tagDirectoryName:
 		var rdnSeq pkix.RDNSequence
@@ -137,6 +143,9 @@ func parseGeneralName(data []byte, who string, gname *GeneralNames, withMask boo
 		dirName.FillFromRDNSequence(&rdnSeq)
 		gname.DirectoryNames = append(gname.DirectoryNames, dirName)
 	case tagURI:
+		if err := isIA5String(string(v.Bytes)); err != nil {
+			errs.AddID(ErrInvalidGeneralNameURIEncoding)
+		}
 		uri, err := url.Parse(string(v.Bytes))
 		if err != nil {
 			errs.addIDFatal(ErrAsn1InvalidGeneralNameURI, who, string(v.Bytes), err)
@@ -179,7 +188,7 @@ func parseGeneralName(data []byte, who string, gname *GeneralNames, withMask boo
 		}
 		gname.RegisteredIDs = append(gname.RegisteredIDs, oid)
 	default:
-		errs.addIDFatal(ErrInvalidGeneralNameTag, v.Tag, who)
+		errs.AddID(ErrInvalidGeneralNameTag, v.Tag, who)
 		return nil
 	}
 	return rest

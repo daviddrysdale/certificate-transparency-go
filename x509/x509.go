@@ -51,6 +51,7 @@
 //     - Support FreshestCRL extension
 //     - Support SubjectDirectoryAttributes extension
 //     - Support more AuthorityKeyID fields
+//     - Export more SAN details
 //     - Export and use OID values throughout.
 //     - Export OIDFromNamedCurve().
 //     - Export SignatureAlgorithmFromAI().
@@ -875,6 +876,9 @@ type Certificate struct {
 	// Subject Alternate Name values. (Note that these values may not be valid
 	// if invalid values were contained within a parsed certificate. For
 	// example, an element of DNSNames may not be a valid DNS domain name.)
+	AltNames GeneralNames
+	// The following fields are preserved for back-compatibility, but are equal
+	// to the corresponding fields in AltNames.
 	DNSNames       []string
 	EmailAddresses []string
 	IPAddresses    []net.IP
@@ -1325,13 +1329,6 @@ type policyQualifierInfo struct {
 	Qualifier asn1.RawValue
 }
 
-const (
-	nameTypeEmail = 1
-	nameTypeDNS   = 2
-	nameTypeURI   = 6
-	nameTypeIP    = 7
-)
-
 // PolicyMapping describes a mapping from issuer to subject certificate policies.
 // RFC 5280, 4.2.1.5
 type PolicyMapping struct {
@@ -1570,7 +1567,7 @@ func parseDistributionPoints(data []byte, crldp *[]string) error {
 		}
 
 		for _, fullName := range dp.DistributionPoint.FullName {
-			if fullName.Tag == 6 {
+			if fullName.Tag == tagURI {
 				*crldp = append(*crldp, string(fullName.Bytes))
 			}
 		}
@@ -1579,22 +1576,6 @@ func parseDistributionPoints(data []byte, crldp *[]string) error {
 }
 
 func forEachSAN(extension []byte, callback func(tag int, data []byte) error) error {
-	// RFC 5280, 4.2.1.6
-
-	// SubjectAltName ::= GeneralNames
-	//
-	// GeneralNames ::= SEQUENCE SIZE (1..MAX) OF GeneralName
-	//
-	// GeneralName ::= CHOICE {
-	//      otherName                       [0]     OtherName,
-	//      rfc822Name                      [1]     IA5String,
-	//      dNSName                         [2]     IA5String,
-	//      x400Address                     [3]     ORAddress,
-	//      directoryName                   [4]     Name,
-	//      ediPartyName                    [5]     EDIPartyName,
-	//      uniformResourceIdentifier       [6]     IA5String,
-	//      iPAddress                       [7]     OCTET STRING,
-	//      registeredID                    [8]     OBJECT IDENTIFIER }
 	var seq asn1.RawValue
 	rest, err := asn1.Unmarshal(extension, &seq)
 	if err != nil {
@@ -1625,17 +1606,17 @@ func forEachSAN(extension []byte, callback func(tag int, data []byte) error) err
 func parseSANExtension(value []byte, nfe *NonFatalErrors) (dnsNames, emailAddresses []string, ipAddresses []net.IP, uris []*url.URL, err error) {
 	err = forEachSAN(value, func(tag int, data []byte) error {
 		switch tag {
-		case nameTypeEmail:
+		case tagRFC822Name:
 			if err := isIA5String(string(data)); err != nil {
 				nfe.AddError(fmt.Errorf("x509: invalid email altName (%x) contents: %v", data, err))
 			}
 			emailAddresses = append(emailAddresses, string(data))
-		case nameTypeDNS:
+		case tagDNSName:
 			if err := isIA5String(string(data)); err != nil {
 				nfe.AddError(fmt.Errorf("x509: invalid DNS altName (%x) contents: %v", data, err))
 			}
 			dnsNames = append(dnsNames, string(data))
-		case nameTypeURI:
+		case tagURI:
 			if err := isIA5String(string(data)); err != nil {
 				nfe.AddError(fmt.Errorf("x509: invalid URI altName (%x) contents: %v", data, err))
 			}
@@ -1649,7 +1630,7 @@ func parseSANExtension(value []byte, nfe *NonFatalErrors) (dnsNames, emailAddres
 				}
 			}
 			uris = append(uris, uri)
-		case nameTypeIP:
+		case tagIPAddress:
 			switch len(data) {
 			case net.IPv4len, net.IPv6len:
 				ipAddresses = append(ipAddresses, data)
@@ -1734,10 +1715,10 @@ func parseNameConstraintsExtension(out *Certificate, e pkix.Extension, nfe *NonF
 			}
 
 			var (
-				dnsTag   = cryptobyte_asn1.Tag(2).ContextSpecific()
-				emailTag = cryptobyte_asn1.Tag(1).ContextSpecific()
-				ipTag    = cryptobyte_asn1.Tag(7).ContextSpecific()
-				uriTag   = cryptobyte_asn1.Tag(6).ContextSpecific()
+				dnsTag   = cryptobyte_asn1.Tag(tagDNSName).ContextSpecific()
+				emailTag = cryptobyte_asn1.Tag(tagRFC822Name).ContextSpecific()
+				ipTag    = cryptobyte_asn1.Tag(tagIPAddress).ContextSpecific()
+				uriTag   = cryptobyte_asn1.Tag(tagURI).ContextSpecific()
 			)
 
 			switch tag {
@@ -1967,10 +1948,21 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				// TODO: map out.MaxPathLen to 0 if it has the -1 default value? (Issue 19285)
 
 			case OIDExtensionSubjectAltName[3]:
-				out.DNSNames, out.EmailAddresses, out.IPAddresses, out.URIs, err = parseSANExtension(e.Value, &nfe)
-				if err != nil {
-					return nil, err
+				// RFC 5280, 4.2.1.6
+				// SubjectAltName ::= GeneralNames
+				var errs Errors
+				parseGeneralNames(e.Value, "SubjectAltName", &out.AltNames, &errs)
+				if errs.Fatal() {
+					return nil, &errs
 				}
+				nfe.copyErrs(&errs)
+				// Copy specific contents into back-compatible fields
+				out.DNSNames = out.AltNames.DNSNames
+				out.EmailAddresses = out.AltNames.EmailAddresses
+				for _, ipNet := range out.AltNames.IPNets {
+					out.IPAddresses = append(out.IPAddresses, ipNet.IP)
+				}
+				out.URIs = out.AltNames.URIs
 
 				if len(out.DNSNames) == 0 && len(out.EmailAddresses) == 0 && len(out.IPAddresses) == 0 && len(out.URIs) == 0 {
 					// If we didn't parse anything then we do the critical check, below.
@@ -2460,10 +2452,10 @@ func oidInExtensions(oid asn1.ObjectIdentifier, extensions []pkix.Extension) boo
 func marshalSANs(dnsNames, emailAddresses []string, ipAddresses []net.IP, uris []*url.URL) (derBytes []byte, err error) {
 	var rawValues []asn1.RawValue
 	for _, name := range dnsNames {
-		rawValues = append(rawValues, asn1.RawValue{Tag: nameTypeDNS, Class: asn1.ClassContextSpecific, Bytes: []byte(name)})
+		rawValues = append(rawValues, asn1.RawValue{Tag: tagDNSName, Class: asn1.ClassContextSpecific, Bytes: []byte(name)})
 	}
 	for _, email := range emailAddresses {
-		rawValues = append(rawValues, asn1.RawValue{Tag: nameTypeEmail, Class: asn1.ClassContextSpecific, Bytes: []byte(email)})
+		rawValues = append(rawValues, asn1.RawValue{Tag: tagRFC822Name, Class: asn1.ClassContextSpecific, Bytes: []byte(email)})
 	}
 	for _, rawIP := range ipAddresses {
 		// If possible, we always want to encode IPv4 addresses in 4 bytes.
@@ -2471,10 +2463,10 @@ func marshalSANs(dnsNames, emailAddresses []string, ipAddresses []net.IP, uris [
 		if ip == nil {
 			ip = rawIP
 		}
-		rawValues = append(rawValues, asn1.RawValue{Tag: nameTypeIP, Class: asn1.ClassContextSpecific, Bytes: ip})
+		rawValues = append(rawValues, asn1.RawValue{Tag: tagIPAddress, Class: asn1.ClassContextSpecific, Bytes: ip})
 	}
 	for _, uri := range uris {
-		rawValues = append(rawValues, asn1.RawValue{Tag: nameTypeURI, Class: asn1.ClassContextSpecific, Bytes: []byte(uri.String())})
+		rawValues = append(rawValues, asn1.RawValue{Tag: tagURI, Class: asn1.ClassContextSpecific, Bytes: []byte(uri.String())})
 	}
 	return asn1.Marshal(rawValues)
 }
@@ -2953,7 +2945,7 @@ var emptyASN1Subject = []byte{0x30, 0}
 //    - AuthorityKeyId
 //    - OCSPServer, IssuingCertificateURL
 //    - SubjectTimestamps, SubjectCARepositories
-//    - DNSNames, EmailAddresses, IPAddresses, URIs
+//    - AltNames and/or: DNSNames, EmailAddresses, IPAddresses, URIs
 //    - SubjectDirectoryAttributes
 //    - PolicyIdentifiers
 //    - ExcludedDNSDomains, ExcludedIPRanges, ExcludedEmailAddresses, ExcludedURIDomains, PermittedDNSDomainsCritical,
@@ -3530,10 +3522,18 @@ func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error
 
 	for _, extension := range out.Extensions {
 		if extension.Id.Equal(OIDExtensionSubjectAltName) {
-			out.DNSNames, out.EmailAddresses, out.IPAddresses, out.URIs, err = parseSANExtension(extension.Value, &nfe)
-			if err != nil {
-				return nil, err
+			var errs Errors
+			var names GeneralNames
+			parseGeneralNames(extension.Value, "SubjectAltName", &names, &errs)
+			if errs.Fatal() {
+				return nil, &errs
 			}
+			out.DNSNames = names.DNSNames
+			out.EmailAddresses = names.EmailAddresses
+			for _, ipNet := range names.IPNets {
+				out.IPAddresses = append(out.IPAddresses, ipNet.IP)
+			}
+			out.URIs = names.URIs
 		}
 	}
 

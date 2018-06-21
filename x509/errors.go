@@ -47,6 +47,9 @@ const (
 	ErrGeneralNameIPLen
 	ErrAsn1InvalidGeneralNameOID
 	ErrInvalidGeneralNameTag
+	ErrInvalidGeneralNameEmailEncoding
+	ErrInvalidGeneralNameDNSEncoding
+	ErrInvalidGeneralNameURIEncoding
 
 	ErrMaxID
 )
@@ -394,7 +397,27 @@ var errorInfo = []Error{
 		Field:    "GeneralName",
 		SpecRef:  "RFC 5280 s4.2.1.6",
 		Category: InvalidASN1Content,
-		Fatal:    true,
+	},
+	{
+		ID:       ErrInvalidGeneralNameEmailEncoding,
+		Summary:  "x509: invalid email altName contents encoding",
+		Field:    "GeneralName.rfc822Name",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+	},
+	{
+		ID:       ErrInvalidGeneralNameDNSEncoding,
+		Summary:  "x509: invalid DNS altName contents encoding",
+		Field:    "GeneralName.dNSName",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
+	},
+	{
+		ID:       ErrInvalidGeneralNameURIEncoding,
+		Summary:  "x509: invalid URI altName contents encoding",
+		Field:    "GeneralName.uniformResourceIdentifier",
+		SpecRef:  "RFC 5280 s4.2.1.6",
+		Category: InvalidASN1Content,
 	},
 }
 
