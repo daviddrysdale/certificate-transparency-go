@@ -468,6 +468,12 @@ func showAuthKeyID(result *bytes.Buffer, cert *x509.Certificate) {
 		result.WriteString(fmt.Sprintf("            X509v3 Authority Key Identifier:"))
 		showCritical(result, critical)
 		result.WriteString(fmt.Sprintf("                keyid:%v\n", hex.EncodeToString(cert.AuthorityKeyId)))
+		if !cert.AuthorityKeyIssuer.Empty() {
+			result.WriteString(fmt.Sprintf("                %v\n", GeneralNamesToString(&cert.AuthorityKeyIssuer)))
+		}
+		if cert.AuthorityKeySerialNumber != nil {
+			result.WriteString(fmt.Sprintf("                serial:%v\n", hex.EncodeToString(cert.AuthorityKeySerialNumber.Bytes())))
+		}
 	}
 }
 
