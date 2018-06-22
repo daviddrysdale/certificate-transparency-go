@@ -859,6 +859,8 @@ func oidAlreadyPrinted(oid asn1.ObjectIdentifier) bool {
 
 // CertificateFromPEM takes a certificate in PEM format and returns the
 // corresponding x509.Certificate object.
+// This function can return both a Certificate and an error (in which case the
+// error will have x509.IsFatal(err) == false).
 func CertificateFromPEM(pemBytes []byte) (*x509.Certificate, error) {
 	block, rest := pem.Decode(pemBytes)
 	if len(rest) != 0 {
@@ -889,7 +891,7 @@ func CertificatesFromPEM(pemBytes []byte) ([]*x509.Certificate, error) {
 			return nil, fmt.Errorf("PEM block is not a CERTIFICATE")
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
+		if x509.IsFatal(err) {
 			return nil, errors.New("failed to parse certificate")
 		}
 		chain = append(chain, cert)
