@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	ct "github.com/google/certificate-transparency-go"
 	"github.com/google/certificate-transparency-go/asn1"
@@ -527,22 +528,37 @@ func showSubjectAltName(result *bytes.Buffer, cert *x509.Certificate) {
 	}
 }
 
+func showConstraints(result *bytes.Buffer, which string, dns []string, ipRanges []*net.IPNet, emails, uris []string) {
+	if len(dns)+len(ipRanges)+len(emails)+len(uris) == 0 {
+		return
+	}
+	result.WriteString(fmt.Sprintf("                %s:\n", which))
+	if len(dns) > 0 {
+		result.WriteString(fmt.Sprintf("                  DNS:%v\n", strings.Join(dns, ",")))
+	}
+	if len(ipRanges) > 0 {
+		v := make([]string, len(ipRanges))
+		for i, ipRange := range ipRanges {
+			v[i] = ipRange.String()
+		}
+		result.WriteString(fmt.Sprintf("                  URI: %v\n", strings.Join(v, ",")))
+	}
+	if len(emails) > 0 {
+		result.WriteString(fmt.Sprintf("                  email: %v\n", strings.Join(emails, ",")))
+	}
+	if len(uris) > 0 {
+		result.WriteString(fmt.Sprintf("                  URI: %v\n", strings.Join(uris, ",")))
+	}
+}
+
 func showNameConstraints(result *bytes.Buffer, cert *x509.Certificate) {
 	count, critical := OIDInExtensions(x509.OIDExtensionNameConstraints, cert.Extensions)
 	if count > 0 {
 		result.WriteString(fmt.Sprintf("            X509v3 Name Constraints:"))
 		showCritical(result, critical)
-		if len(cert.PermittedDNSDomains) > 0 {
-			result.WriteString(fmt.Sprintf("                Permitted:\n"))
-			var buf bytes.Buffer
-			for _, name := range cert.PermittedDNSDomains {
-				commaAppend(&buf, "DNS:"+name)
-			}
-			result.WriteString(fmt.Sprintf("                  %v\n", buf.String()))
-		}
-		// TODO(drysdale): include other name forms
+		showConstraints(result, "Permitted", cert.PermittedDNSDomains, cert.PermittedIPRanges, cert.PermittedEmailAddresses, cert.PermittedURIDomains)
+		showConstraints(result, "Excluded", cert.ExcludedDNSDomains, cert.ExcludedIPRanges, cert.ExcludedEmailAddresses, cert.ExcludedURIDomains)
 	}
-
 }
 
 func showCertPolicies(result *bytes.Buffer, cert *x509.Certificate) {
