@@ -50,6 +50,7 @@
 //     - Support unique IDs
 //     - Support FreshestCRL extension
 //     - Support SubjectDirectoryAttributes extension
+//     - Support IssuerAltName extension
 //     - Support more AuthorityKeyID fields
 //     - Export more SAN details
 //     - Export and use OID values throughout.
@@ -883,6 +884,9 @@ type Certificate struct {
 	EmailAddresses []string
 	IPAddresses    []net.IP
 	URIs           []*url.URL
+
+	// Issuer Alternative Name values
+	IssuerAltNames GeneralNames
 
 	// Name constraints
 	// PermittedDNSDomainsCritical indicates whether the name constraints are
@@ -2124,6 +2128,15 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					return nil, err
 				}
 
+			case OIDExtensionIssuerAltName[3]:
+				// RFC 5280 4.2.1.7: Issuer Alternative Name
+				var errs Errors
+				parseGeneralNames(e.Value, "IssuerAltName", &out.IssuerAltNames, &errs)
+				if errs.Fatal() {
+					return nil, &errs
+				}
+				nfe.copyErrs(&errs)
+
 			default:
 				// Unknown extensions are recorded if critical.
 				unhandled = true
@@ -2440,7 +2453,7 @@ func isIA5String(s string) error {
 }
 
 func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId []byte) (ret []pkix.Extension, err error) {
-	ret = make([]pkix.Extension, 17 /* maximum number of elements. */)
+	ret = make([]pkix.Extension, 18 /* maximum number of elements. */)
 	n := 0
 
 	if template.KeyUsage != 0 &&
@@ -2576,6 +2589,22 @@ func buildExtensions(template *Certificate, subjectIsEmpty bool, authorityKeyId 
 			return
 		}
 		n++
+	}
+
+	if !oidInExtensions(OIDExtensionIssuerAltName, template.ExtraExtensions) {
+		altNames := &template.IssuerAltNames
+		if !altNames.Empty() {
+			ret[n].Id = OIDExtensionIssuerAltName
+			ips := make([]net.IP, len(altNames.IPNets))
+			for i, ipNet := range altNames.IPNets {
+				ips[i] = ipNet.IP
+			}
+			ret[n].Value, err = marshalSANs(altNames.DNSNames, altNames.EmailAddresses, ips, altNames.URIs)
+			if err != nil {
+				return
+			}
+			n++
+		}
 	}
 
 	if len(template.SubjectDirectoryAttributes) > 0 &&
@@ -2904,6 +2933,7 @@ var emptyASN1Subject = []byte{0x30, 0}
 //    - OCSPServer, IssuingCertificateURL
 //    - SubjectTimestamps, SubjectCARepositories
 //    - AltNames and/or: DNSNames, EmailAddresses, IPAddresses, URIs
+//    - IssuerAltNames
 //    - SubjectDirectoryAttributes
 //    - PolicyIdentifiers
 //    - ExcludedDNSDomains, ExcludedIPRanges, ExcludedEmailAddresses, ExcludedURIDomains, PermittedDNSDomainsCritical,
