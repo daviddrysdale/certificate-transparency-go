@@ -1910,7 +1910,7 @@ func TestUnknownAuthorityError(t *testing.T) {
 			t.Errorf("#%d: Unable to decode PEM block", i)
 		}
 		c, err := ParseCertificate(der.Bytes)
-		if err != nil {
+		if IsFatal(err) {
 			t.Errorf("#%d: Unable to parse certificate -> %v", i, err)
 		}
 		uae := &UnknownAuthorityError{

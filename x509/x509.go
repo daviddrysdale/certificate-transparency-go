@@ -45,6 +45,7 @@
 //     - Extension critical status
 //     - Key usage details
 //     - CertificatePolicies details
+//     - SerialNumber > 0
 //  - General improvements:
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Support unique IDs
@@ -1815,6 +1816,12 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 
 	out.Version = in.TBSCertificate.Version + 1
 	out.SerialNumber = in.TBSCertificate.SerialNumber
+	sgn := out.SerialNumber.Sign()
+	if sgn < 0 {
+		nfe.AddError(errors.New("x509: negative serial number"))
+	} else if sgn == 0 {
+		nfe.AddError(errors.New("x509: zero serial number"))
+	}
 	out.IssuerUniqueId = in.TBSCertificate.UniqueId
 	out.SubjectUniqueId = in.TBSCertificate.SubjectUniqueId
 

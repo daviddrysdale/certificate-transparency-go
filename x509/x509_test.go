@@ -715,7 +715,7 @@ func TestCreateSelfSignedCertificate(t *testing.T) {
 		}
 
 		cert, err := ParseCertificate(derBytes)
-		if err != nil {
+		if IsFatal(err) {
 			t.Errorf("%s: failed to parse certificate: %s", test.name, err)
 			continue
 		}
@@ -2139,7 +2139,7 @@ MCRtdSdaM7g3
 
 func TestISOOIDInCertificate(t *testing.T) {
 	block, _ := pem.Decode([]byte(certISOOID))
-	if cert, err := ParseCertificate(block.Bytes); err != nil {
+	if cert, err := ParseCertificate(block.Bytes); IsFatal(err) {
 		t.Errorf("certificate with ISO OID failed to parse: %s", err)
 	} else if cert.SignatureAlgorithm == UnknownSignatureAlgorithm {
 		t.Errorf("ISO OID not recognised in certificate")
@@ -2676,6 +2676,8 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "CertPoliciesUnknownAny", in: "testdata/invalid/xf-ext-cert-policies-any-qual.pem", wantErr: "unknown policy qualifier"},
 		{desc: "SubjectInfoEmpty", in: "testdata/invalid/xf-ext-subject-info-empty.pem", wantErr: "empty SubjectInfoAccess"},
 		{desc: "SubjectDirAttrEmpty", in: "testdata/invalid/xf-ext-subject-dirattr-empty.pem", wantErr: "empty X.509 subject directory attributes"},
+		{desc: "NegativeSerialNumber", in: "testdata/invalid/xf-serial-negative.pem", wantErr: "negative serial number"},
+		{desc: "ZeroSerialNumber", in: "testdata/invalid/xf-serial-zero.pem", wantErr: "zero serial number"},
 	}
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
