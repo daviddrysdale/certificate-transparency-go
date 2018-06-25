@@ -197,6 +197,20 @@ func (e *Errors) addIDFatal(id ErrorID, args ...interface{}) {
 	e.Errs = append(e.Errs, err)
 }
 
+// Append combines the contents of two Errors instances.
+func (e *Errors) Append(more *Errors) *Errors {
+	if e == nil {
+		return more
+	}
+	if more == nil {
+		return e
+	}
+	combined := Errors{Errs: make([]Error, 0, len(e.Errs)+len(more.Errs))}
+	combined.Errs = append(combined.Errs, e.Errs...)
+	combined.Errs = append(combined.Errs, more.Errs...)
+	return &combined
+}
+
 func (e Errors) combineErrors(errfn func(Error) string) string {
 	if len(e.Errs) == 0 {
 		return ""

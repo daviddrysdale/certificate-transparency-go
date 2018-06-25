@@ -7,8 +7,6 @@ package x509
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
-	"fmt"
 
 	"github.com/google/certificate-transparency-go/asn1"
 )
@@ -60,7 +58,7 @@ type ipAddressRange struct {
 	Max asn1.BitString
 }
 
-func parseRPKIAddrBlocks(data []byte, nfe *NonFatalErrors) []*IPAddressFamilyBlocks {
+func parseRPKIAddrBlocks(data []byte, errs *Errors) []*IPAddressFamilyBlocks {
 	// RFC 3779 2.2.3
 	//   IPAddrBlocks        ::= SEQUENCE OF IPAddressFamily
 	//
@@ -84,10 +82,10 @@ func parseRPKIAddrBlocks(data []byte, nfe *NonFatalErrors) []*IPAddressFamilyBlo
 
 	var addrBlocks []ipAddressFamily
 	if rest, err := asn1.Unmarshal(data, &addrBlocks); err != nil {
-		nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal ipAddrBlocks extension: %v", err))
+		errs.AddID(ErrAsn1InvalidIPAddrBlocks, err)
 		return nil
 	} else if len(rest) != 0 {
-		nfe.AddError(errors.New("trailing data after ipAddrBlocks extension"))
+		errs.AddID(ErrAsn1TrailingIPAddrBlocks)
 		return nil
 	}
 
@@ -95,7 +93,7 @@ func parseRPKIAddrBlocks(data []byte, nfe *NonFatalErrors) []*IPAddressFamilyBlo
 	for i, block := range addrBlocks {
 		var fam IPAddressFamilyBlocks
 		if l := len(block.AddressFamily); l < 2 || l > 3 {
-			nfe.AddError(fmt.Errorf("invalid address family length (%d) for ipAddrBlock.addressFamily", l))
+			errs.AddID(ErrIPAddressFamilyLength, l)
 			continue
 		}
 		fam.AFI = binary.BigEndian.Uint16(block.AddressFamily[0:2])
@@ -112,7 +110,7 @@ func parseRPKIAddrBlocks(data []byte, nfe *NonFatalErrors) []*IPAddressFamilyBlo
 
 		var addrRanges []asn1.RawValue
 		if _, err := asn1.Unmarshal(block.Choice.FullBytes, &addrRanges); err != nil {
-			nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal ipAddrBlocks[%d].ipAddressChoice.addressesOrRanges: %v", i, err))
+			errs.AddID(ErrAsn1InvalidIPAddressOrRange, i, err)
 			continue
 		}
 		for j, ar := range addrRanges {
@@ -123,7 +121,7 @@ func parseRPKIAddrBlocks(data []byte, nfe *NonFatalErrors) []*IPAddressFamilyBlo
 				// BIT STRING for single prefix IPAddress
 				var val asn1.BitString
 				if _, err := asn1.Unmarshal(ar.FullBytes, &val); err != nil {
-					nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal ipAddrBlocks[%d].ipAddressChoice.addressesOrRanges[%d].addressPrefix: %v", i, j, err))
+					errs.AddID(ErrAsn1InvalidIPAddrBlockAddress, i, j, err)
 					continue
 				}
 				fam.AddressPrefixes = append(fam.AddressPrefixes, IPAddressPrefix(val))
@@ -131,13 +129,13 @@ func parseRPKIAddrBlocks(data []byte, nfe *NonFatalErrors) []*IPAddressFamilyBlo
 			case asn1.TagSequence:
 				var val ipAddressRange
 				if _, err := asn1.Unmarshal(ar.FullBytes, &val); err != nil {
-					nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal ipAddrBlocks[%d].ipAddressChoice.addressesOrRanges[%d].addressRange: %v", i, j, err))
+					errs.AddID(ErrAsn1InvalidIPAddrBlockAddressRange, i, j, err)
 					continue
 				}
 				fam.AddressRanges = append(fam.AddressRanges, IPAddressRange{Min: IPAddressPrefix(val.Min), Max: IPAddressPrefix(val.Max)})
 
 			default:
-				nfe.AddError(fmt.Errorf("unexpected ASN.1 type in ipAddrBlocks[%d].ipAddressChoice.addressesOrRanges[%d]: %+v", i, j, ar))
+				errs.AddID(ErrAsn1InvalidIPAddrBlockAddressType, i, j, ar)
 			}
 		}
 		results = append(results, &fam)
@@ -169,7 +167,7 @@ type asIdentifiers struct {
 	RDI   asn1.RawValue `asn1:"optional,tag:1"`
 }
 
-func parseASIDChoice(val asn1.RawValue, nfe *NonFatalErrors) *ASIdentifiers {
+func parseASIDChoice(val asn1.RawValue, errs *Errors) *ASIdentifiers {
 	// RFC 3779 2.3.2
 	//   ASIdentifierChoice  ::= CHOICE {
 	//      inherit              NULL, -- inherit from issuer --
@@ -191,10 +189,10 @@ func parseASIDChoice(val asn1.RawValue, nfe *NonFatalErrors) *ASIdentifiers {
 	}
 	var ids []asn1.RawValue
 	if rest, err := asn1.Unmarshal(val.Bytes, &ids); err != nil {
-		nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal ASIdentifiers.asIdsOrRanges: %v", err))
+		errs.AddID(ErrAsn1InvalidASIdOrRange, err)
 		return nil
 	} else if len(rest) != 0 {
-		nfe.AddError(errors.New("trailing data after ASIdentifiers.asIdsOrRanges"))
+		errs.AddID(ErrAsn1TrailingASIdOrRange)
 		return nil
 	}
 	var asID ASIdentifiers
@@ -205,7 +203,7 @@ func parseASIDChoice(val asn1.RawValue, nfe *NonFatalErrors) *ASIdentifiers {
 		case asn1.TagInteger:
 			var val int
 			if _, err := asn1.Unmarshal(id.FullBytes, &val); err != nil {
-				nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal ASIdentifiers.asIdsOrRanges[%d].id: %v", i, err))
+				errs.AddID(ErrAsn1InvalidASId, i, err)
 				continue
 			}
 			asID.ASIDs = append(asID.ASIDs, val)
@@ -213,30 +211,30 @@ func parseASIDChoice(val asn1.RawValue, nfe *NonFatalErrors) *ASIdentifiers {
 		case asn1.TagSequence:
 			var val ASIDRange
 			if _, err := asn1.Unmarshal(id.FullBytes, &val); err != nil {
-				nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal ASIdentifiers.asIdsOrRanges[%d].range: %v", i, err))
+				errs.AddID(ErrAsn1InvalidASRange, i, err)
 				continue
 			}
 			asID.ASIDRanges = append(asID.ASIDRanges, val)
 
 		default:
-			nfe.AddError(fmt.Errorf("unexpected value in ASIdentifiers.asIdsOrRanges[%d]: %+v", i, id))
+			errs.AddID(ErrAsn1InvalidASType, i, id)
 		}
 	}
 	return &asID
 }
 
-func parseRPKIASIdentifiers(data []byte, nfe *NonFatalErrors) (*ASIdentifiers, *ASIdentifiers) {
+func parseRPKIASIdentifiers(data []byte, errs *Errors) (*ASIdentifiers, *ASIdentifiers) {
 	// RFC 3779 2.3.2
 	//   ASIdentifiers       ::= SEQUENCE {
 	//       asnum               [0] EXPLICIT ASIdentifierChoice OPTIONAL,
 	//       rdi                 [1] EXPLICIT ASIdentifierChoice OPTIONAL}
 	var asIDs asIdentifiers
 	if rest, err := asn1.Unmarshal(data, &asIDs); err != nil {
-		nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal ASIdentifiers extension: %v", err))
+		errs.AddID(ErrAsn1InvalidASIdentifiers, err)
 		return nil, nil
 	} else if len(rest) != 0 {
-		nfe.AddError(errors.New("trailing data after ASIdentifiers extension"))
+		errs.AddID(ErrAsn1TrailingASIdentifiers)
 		return nil, nil
 	}
-	return parseASIDChoice(asIDs.ASNum, nfe), parseASIDChoice(asIDs.RDI, nfe)
+	return parseASIDChoice(asIDs.ASNum, errs), parseASIDChoice(asIDs.RDI, errs)
 }

@@ -18,8 +18,8 @@
 //       nilref_*_darwin.go, ptr_*_windows.go).
 //  - Laxer certificate parsing:
 //     - Add options to disable various validation checks (times, EKUs etc).
-//     - Use NonFatalErrors type for some errors and continue parsing; this
-//       can be checked with IsFatal(err).
+//     - Have errors which can be non-fatal, so parsing continues; this can
+//       be checked with IsFatal(err).
 //     - Support for short bitlength ECDSA curves (in curves.go).
 //     - Optional support for MD5 hash.
 //     - Looser Subject/Issuer matching.
@@ -48,6 +48,7 @@
 //     - SerialNumber > 0
 //     - inter-extension consistency
 //  - General improvements:
+//     - Use Errors type for detailed spec-violation information.
 //     - Support PolicyMapping, PolicyConstraint and InhibitAnyPolicy extensions
 //     - Support unique IDs
 //     - Support FreshestCRL extension
@@ -119,14 +120,14 @@ func ParsePKIXPublicKey(derBytes []byte) (pub interface{}, err error) {
 	if algo == UnknownPublicKeyAlgorithm {
 		return nil, errors.New("x509: unknown public key algorithm")
 	}
-	var nfe NonFatalErrors
-	pub, err = parsePublicKey(algo, &pki, &nfe)
+	var errs Errors
+	pub, err = parsePublicKey(algo, &pki, &errs)
 	if err != nil {
 		return pub, err
 	}
 	// Treat non-fatal errors as fatal for this entrypoint.
-	if len(nfe.Errors) > 0 {
-		return nil, nfe.Errors[0]
+	if !errs.Empty() {
+		return nil, errs.Errs[0]
 	}
 	return pub, nil
 }
@@ -629,7 +630,7 @@ var (
 	OIDNamedCurveP192 = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 1}
 )
 
-func namedCurveFromOID(oid asn1.ObjectIdentifier, nfe *NonFatalErrors) elliptic.Curve {
+func namedCurveFromOID(oid asn1.ObjectIdentifier, errs *Errors) elliptic.Curve {
 	switch {
 	case oid.Equal(OIDNamedCurveP224):
 		return elliptic.P224()
@@ -640,7 +641,7 @@ func namedCurveFromOID(oid asn1.ObjectIdentifier, nfe *NonFatalErrors) elliptic.
 	case oid.Equal(OIDNamedCurveP521):
 		return elliptic.P521()
 	case oid.Equal(OIDNamedCurveP192):
-		nfe.AddError(errors.New("insecure curve (secp192r1) specified"))
+		errs.AddID(ErrPubKeyInsecureCurve, "secp192r1")
 		return secp192r1()
 	}
 	return nil
@@ -1366,14 +1367,14 @@ type distributionPointName struct {
 	RelativeName pkix.RDNSequence `asn1:"optional,tag:1"`
 }
 
-func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, nfe *NonFatalErrors) (interface{}, error) {
+func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, errs *Errors) (interface{}, error) {
 	asn1Data := keyData.PublicKey.RightAlign()
 	switch algo {
 	case RSA, RSAESOAEP:
 		// RSA public keys must have a NULL in the parameters.
 		// See RFC 3279, Section 2.3.1.
 		if algo == RSA && !bytes.Equal(keyData.Algorithm.Parameters.FullBytes, asn1.NullBytes) {
-			nfe.AddError(errors.New("x509: RSA key missing NULL parameters"))
+			errs.AddID(ErrPubKeyRSANonNullParams)
 		}
 		if algo == RSAESOAEP {
 			// We only parse the parameters to ensure it is a valid encoding, we throw out the actual values
@@ -1399,14 +1400,14 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, nfe *NonFat
 			if laxErr != nil {
 				return nil, laxErr
 			}
-			nfe.AddError(err)
+			errs.AddID(ErrPubKeyRSAAsn1Invalid, err)
 		}
 		if len(rest) != 0 {
 			return nil, errors.New("x509: trailing data after RSA public key")
 		}
 
 		if p.N.Sign() <= 0 {
-			nfe.AddError(errors.New("x509: RSA modulus is not a positive number"))
+			errs.AddID(ErrPubKeyRSANonPositiveModulus)
 		}
 		if p.E <= 0 {
 			return nil, errors.New("x509: RSA public exponent is not a positive number")
@@ -1427,7 +1428,7 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, nfe *NonFat
 			if laxErr != nil {
 				return nil, laxErr
 			}
-			nfe.AddError(err)
+			errs.AddID(ErrPubKeyDSAAsn1Invalid, err)
 		}
 		if len(rest) != 0 {
 			return nil, errors.New("x509: trailing data after DSA public key")
@@ -1463,7 +1464,7 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, nfe *NonFat
 		if len(rest) != 0 {
 			return nil, errors.New("x509: trailing data after ECDSA parameters")
 		}
-		namedCurve := namedCurveFromOID(*namedCurveOID, nfe)
+		namedCurve := namedCurveFromOID(*namedCurveOID, errs)
 		if namedCurve == nil {
 			return nil, fmt.Errorf("x509: unsupported elliptic curve %v", namedCurveOID)
 		}
@@ -1482,63 +1483,9 @@ func parsePublicKey(algo PublicKeyAlgorithm, keyData *publicKeyInfo, nfe *NonFat
 	}
 }
 
-// NonFatalErrors is an error type which can hold a number of other errors.
-// It's used to collect a range of non-fatal errors which occur while parsing
-// a certificate, that way we can still match on certs which technically are
-// invalid.
-type NonFatalErrors struct {
-	Errors []error
-}
-
-// AddError adds an error to the list of errors contained by NonFatalErrors.
-func (e *NonFatalErrors) AddError(err error) {
-	e.Errors = append(e.Errors, err)
-}
-
-// Returns a string consisting of the values of Error() from all of the errors
-// contained in |e|
-func (e NonFatalErrors) Error() string {
-	r := "NonFatalErrors: "
-	for _, err := range e.Errors {
-		r += err.Error() + "; "
-	}
-	return r
-}
-
-// HasError returns true if |e| contains at least one error
-func (e *NonFatalErrors) HasError() bool {
-	if e == nil {
-		return false
-	}
-	return len(e.Errors) > 0
-}
-
-// Append combines the contents of two NonFatalErrors instances.
-func (e *NonFatalErrors) Append(more *NonFatalErrors) *NonFatalErrors {
-	if e == nil {
-		return more
-	}
-	if more == nil {
-		return e
-	}
-	combined := NonFatalErrors{Errors: make([]error, 0, len(e.Errors)+len(more.Errors))}
-	combined.Errors = append(combined.Errors, e.Errors...)
-	combined.Errors = append(combined.Errors, more.Errors...)
-	return &combined
-}
-
-func (e *NonFatalErrors) copyErrs(errs *Errors) {
-	for _, err := range errs.Errs {
-		e.AddError(err)
-	}
-}
-
 // IsFatal indicates whether an error is fatal.
 func IsFatal(err error) bool {
 	if err == nil {
-		return false
-	}
-	if _, ok := err.(NonFatalErrors); ok {
 		return false
 	}
 	if errs, ok := err.(*Errors); ok {
@@ -1634,7 +1581,7 @@ func isValidIPMask(mask []byte) bool {
 	return true
 }
 
-func parseNameConstraintsExtension(out *Certificate, e pkix.Extension, nfe *NonFatalErrors) (unhandled bool, err error) {
+func parseNameConstraintsExtension(out *Certificate, e pkix.Extension, errs *Errors) (unhandled bool, err error) {
 	// RFC 5280, 4.2.1.10
 
 	// NameConstraints ::= SEQUENCE {
@@ -1701,7 +1648,7 @@ func parseNameConstraintsExtension(out *Certificate, e pkix.Extension, nfe *NonF
 					trimmedDomain = trimmedDomain[1:]
 				}
 				if _, ok := domainToReverseLabels(trimmedDomain); !ok {
-					nfe.AddError(fmt.Errorf("x509: failed to parse dnsName constraint %q", domain))
+					errs.AddID(ErrNameConstraintsInvalidDomain, domain)
 				}
 				dnsNames = append(dnsNames, domain)
 
@@ -1738,7 +1685,7 @@ func parseNameConstraintsExtension(out *Certificate, e pkix.Extension, nfe *NonF
 				// it specifies an exact mailbox name.
 				if strings.Contains(constraint, "@") {
 					if _, ok := parseRFC2821Mailbox(constraint); !ok {
-						nfe.AddError(fmt.Errorf("x509: failed to parse rfc822Name constraint %q", constraint))
+						errs.AddID(ErrNameConstraintsInvalidEmail, constraint)
 					}
 				} else {
 					// Otherwise it's a domain name.
@@ -1747,7 +1694,7 @@ func parseNameConstraintsExtension(out *Certificate, e pkix.Extension, nfe *NonF
 						domain = domain[1:]
 					}
 					if _, ok := domainToReverseLabels(domain); !ok {
-						nfe.AddError(fmt.Errorf("x509: failed to parse rfc822Name constraint %q", constraint))
+						errs.AddID(ErrNameConstraintsInvalidEmail, constraint)
 					}
 				}
 				emails = append(emails, constraint)
@@ -1771,7 +1718,7 @@ func parseNameConstraintsExtension(out *Certificate, e pkix.Extension, nfe *NonF
 					trimmedDomain = trimmedDomain[1:]
 				}
 				if _, ok := domainToReverseLabels(trimmedDomain); !ok {
-					nfe.AddError(fmt.Errorf("x509: failed to parse URI constraint %q", domain))
+					errs.AddID(ErrNameConstraintsInvalidURI, domain)
 				}
 				uriDomains = append(uriDomains, domain)
 
@@ -1795,7 +1742,7 @@ func parseNameConstraintsExtension(out *Certificate, e pkix.Extension, nfe *NonF
 }
 
 func parseCertificate(in *certificate) (*Certificate, error) {
-	var nfe NonFatalErrors
+	var errs Errors
 
 	out := new(Certificate)
 	out.Raw = in.Raw
@@ -1810,7 +1757,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 	out.PublicKeyAlgorithm =
 		getPublicKeyAlgorithmFromOID(in.TBSCertificate.PublicKey.Algorithm.Algorithm)
 	var err error
-	out.PublicKey, err = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCertificate.PublicKey, &nfe)
+	out.PublicKey, err = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCertificate.PublicKey, &errs)
 	if err != nil {
 		return nil, err
 	}
@@ -1819,9 +1766,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 	out.SerialNumber = in.TBSCertificate.SerialNumber
 	sgn := out.SerialNumber.Sign()
 	if sgn < 0 {
-		nfe.AddError(errors.New("x509: negative serial number"))
+		errs.AddID(ErrSerialNumberNegative)
 	} else if sgn == 0 {
-		nfe.AddError(errors.New("x509: zero serial number"))
+		errs.AddID(ErrSerialNumberZero)
 	}
 	out.IssuerUniqueId = in.TBSCertificate.UniqueId
 	out.SubjectUniqueId = in.TBSCertificate.SubjectUniqueId
@@ -1833,7 +1780,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 		if laxErr != nil {
 			return nil, laxErr
 		}
-		nfe.AddError(err)
+		errs.AddID(ErrSubjectAsn1Invalid, err)
 	} else if len(rest) != 0 {
 		return nil, errors.New("x509: trailing data after X.509 subject")
 	}
@@ -1843,7 +1790,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 		if laxErr != nil {
 			return nil, laxErr
 		}
-		nfe.AddError(err)
+		errs.AddID(ErrIssuerAsn1Invalid, err)
 	} else if len(rest) != 0 {
 		return nil, errors.New("x509: trailing data after X.509 subject")
 	}
@@ -1851,7 +1798,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 	out.Issuer.FillFromRDNSequence(&issuer)
 	out.Subject.FillFromRDNSequence(&subject)
 
-	checkValidity(in.TBSCertificate.Validity, &nfe)
+	checkValidity(in.TBSCertificate.Validity, &errs)
 	out.NotBefore = in.TBSCertificate.Validity.NotBefore
 	out.NotAfter = in.TBSCertificate.Validity.NotAfter
 
@@ -1864,9 +1811,9 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 		unhandled := false
 		if expectCritical, ok := extensionCritical[e.Id.String()]; ok {
 			if e.Critical && !expectCritical {
-				nfe.AddError(fmt.Errorf("x509: extension %v marked as critical but expected to be non-critical", e.Id))
+				errs.AddID(ErrUnexpectedlyCriticalExtension, e.Id)
 			} else if !e.Critical && expectCritical {
-				nfe.AddError(fmt.Errorf("x509: extension %v marked as non-critical but expected to be critical", e.Id))
+				errs.AddID(ErrUnexpectedlyNonCriticalExtension, e.Id)
 			}
 		}
 		if len(e.Id) == 4 && e.Id[0] == OIDExtensionArc[0] && e.Id[1] == OIDExtensionArc[1] && e.Id[2] == OIDExtensionArc[2] {
@@ -1879,7 +1826,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					// The key usage is a named bit list, and so DER requires that trailing
 					// zeros be removed.  However, this is not always complied with so
 					// try not treating the BIT STRING as a named bit list.
-					nfe.AddError(fmt.Errorf("x509: KeyUsage parse error: %v", err))
+					errs.AddID(ErrAsn1InvalidKeyUsageTrailingZeros, err.Error())
 					rest, err = asn1.Unmarshal(e.Value, &usageBits)
 				}
 				if err != nil {
@@ -1888,7 +1835,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					return nil, errors.New("x509: trailing data after X.509 KeyUsage")
 				}
 				if usageBits.BitLength > 9 {
-					nfe.AddError(fmt.Errorf("x509: KeyUsage extension with incorrect number of bits (%d not 9)", usageBits.BitLength))
+					errs.AddID(ErrKeyUsageWrongBitCount, usageBits.BitLength)
 				}
 
 				var usage int
@@ -1898,7 +1845,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					}
 				}
 				if usage == 0 {
-					nfe.AddError(errors.New("x509: KeyUsage extension with no bits set"))
+					errs.AddID(ErrKeyUsageEmpty)
 				}
 				out.KeyUsage = KeyUsage(usage)
 
@@ -1920,18 +1867,16 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 					// Note that we cannot detect an explicit -1 value because
 					// that value has been used as the default value for this integer
 					// field.
-					nfe.AddError(fmt.Errorf("x509: BasicConstraints extension with negative path len (%d)", out.MaxPathLen))
+					errs.AddID(ErrBasicConstraintsNegativePathLen, out.MaxPathLen)
 				}
 
 			case OIDExtensionSubjectAltName[3]:
 				// RFC 5280, 4.2.1.6
 				// SubjectAltName ::= GeneralNames
-				var errs Errors
 				parseGeneralNames(e.Value, "SubjectAltName", &out.AltNames, &errs)
 				if errs.Fatal() {
-					return nil, &errs
+					return nil, errs.FirstFatal()
 				}
-				nfe.copyErrs(&errs)
 				// Copy specific contents into back-compatible fields
 				out.DNSNames = out.AltNames.DNSNames
 				out.EmailAddresses = out.AltNames.EmailAddresses
@@ -1946,7 +1891,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				}
 
 			case OIDExtensionNameConstraints[3]:
-				unhandled, err = parseNameConstraintsExtension(out, e, &nfe)
+				unhandled, err = parseNameConstraintsExtension(out, e, &errs)
 				if err != nil {
 					return nil, err
 				}
@@ -1967,18 +1912,16 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				}
 
 				out.AuthorityKeyId = a.Id
-				var errs Errors
 				if len(a.Issuer.FullBytes) > 0 {
 					parseGeneralNamesWithTag(a.Issuer.FullBytes, "authKeyID", asn1.ClassContextSpecific, 1, &out.AuthorityKeyIssuer, &errs)
 					if errs.Fatal() {
 						return nil, errs.FirstFatal()
 					}
 				}
-				nfe.copyErrs(&errs)
 
 				out.AuthorityKeySerialNumber = a.SerialNumber
 				if len(out.AuthorityKeyId) == 0 && out.AuthorityKeySerialNumber == nil && out.AuthorityKeyIssuer.Empty() {
-					nfe.AddError(errors.New("x509: empty authority key identifier"))
+					errs.AddID(ErrAuthorityKeyIDEmpty)
 				}
 
 			case OIDExtensionExtendedKeyUsage[3]:
@@ -1992,7 +1935,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 
 				var keyUsage []asn1.ObjectIdentifier
 				if len(e.Value) == 0 {
-					nfe.AddError(errors.New("x509: empty ExtendedKeyUsage"))
+					errs.AddID(ErrExtendedKeyUsageEmpty)
 				} else {
 					rest, err := asn1.Unmarshal(e.Value, &keyUsage)
 					if err != nil {
@@ -2001,7 +1944,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 						if laxErr != nil {
 							return nil, laxErr
 						}
-						nfe.AddError(err)
+						errs.AddID(ErrExtendedKeyUsageEmptyOID, err)
 					}
 					if len(rest) != 0 {
 						return nil, errors.New("x509: trailing data after X.509 ExtendedKeyUsage")
@@ -2038,16 +1981,16 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				for i, policy := range policies {
 					for _, existing := range out.PolicyIdentifiers {
 						if existing.Equal(policy.Policy) {
-							nfe.AddError(fmt.Errorf("x509: duplicate policy %v in CertificatePolicies extension", policy.Policy))
+							errs.AddID(ErrCertificatePoliciesDuplicate, policy.Policy)
 						}
 					}
 					out.PolicyIdentifiers[i] = policy.Policy
 					for _, qualifier := range policy.Qualifiers {
 						if !qualifier.ID.Equal(oidPolicyQualifierCpsUri) && !qualifier.ID.Equal(oidPolicyQualifierUserNotice) {
 							if policy.Policy.Equal(OIDAnyPolicy) {
-								nfe.AddError(fmt.Errorf("x509: CertificatePolicies extension including unknown policy qualifier %v for anyPolicy", qualifier.ID))
+								errs.AddID(ErrCertificatePoliciesQualifierUnknownAny, qualifier.ID)
 							} else {
-								nfe.AddError(fmt.Errorf("x509: CertificatePolicies extension including unknown policy qualifier %v", qualifier.ID))
+								errs.AddID(ErrCertificatePoliciesQualifierUnknown, qualifier.ID)
 							}
 						}
 					}
@@ -2090,15 +2033,15 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				for _, v := range rawAttrs {
 					var dirAttr DirectoryAttribute
 					if rest, err := asn1.Unmarshal(v.FullBytes, &dirAttr); err != nil {
-						nfe.AddError(fmt.Errorf("x509: invalid X.509 subject directory attribute: %v", err))
+						errs.AddID(ErrAsn1InvalidSubjectDirAttrs, err.Error())
 						continue
 					} else if len(rest) != 0 {
-						nfe.AddError(errors.New("x509: trailing data after X.509 subject directory attribute"))
+						errs.AddID(ErrAsn1TrailingSubjectDirAttrs)
 					}
 					out.SubjectDirectoryAttributes = append(out.SubjectDirectoryAttributes, dirAttr)
 				}
 				if len(out.SubjectDirectoryAttributes) == 0 {
-					nfe.AddError(errors.New("x509: empty X.509 subject directory attributes extension"))
+					errs.AddID(ErrSubjectDirAttrsEmpty)
 				}
 
 			case OIDExtensionPolicyConstraints[3]:
@@ -2147,9 +2090,8 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				var errs Errors
 				parseGeneralNames(e.Value, "IssuerAltName", &out.IssuerAltNames, &errs)
 				if errs.Fatal() {
-					return nil, &errs
+					return nil, errs.FirstFatal()
 				}
-				nfe.copyErrs(&errs)
 
 			default:
 				// Unknown extensions are recorded if critical.
@@ -2164,7 +2106,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				return nil, errors.New("x509: trailing data after X.509 authority information")
 			}
 			if len(aia) == 0 {
-				nfe.AddError(errors.New("x509: empty AuthorityInfoAccess extension"))
+				errs.AddID(ErrAuthorityInformationAccessEmpty)
 			}
 
 			for _, v := range aia {
@@ -2187,7 +2129,7 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				return nil, errors.New("x509: trailing data after X.509 subject information")
 			}
 			if len(sia) == 0 {
-				nfe.AddError(errors.New("x509: empty SubjectInfoAccess extension"))
+				errs.AddID(ErrSubjectInformationAccessEmpty)
 			}
 
 			for _, v := range sia {
@@ -2203,19 +2145,19 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 				}
 			}
 		} else if e.Id.Equal(OIDExtensionIPPrefixList) {
-			out.RPKIAddressRanges = parseRPKIAddrBlocks(e.Value, &nfe)
+			out.RPKIAddressRanges = parseRPKIAddrBlocks(e.Value, &errs)
 		} else if e.Id.Equal(OIDExtensionASList) {
-			out.RPKIASNumbers, out.RPKIRoutingDomainIDs = parseRPKIASIdentifiers(e.Value, &nfe)
+			out.RPKIASNumbers, out.RPKIRoutingDomainIDs = parseRPKIASIdentifiers(e.Value, &errs)
 		} else if e.Id.Equal(OIDExtensionCTSCT) {
 			if rest, err := asn1.Unmarshal(e.Value, &out.RawSCT); err != nil {
-				nfe.AddError(fmt.Errorf("failed to asn1.Unmarshal SCT list extension: %v", err))
+				errs.AddID(ErrAsn1InvalidSCT, err.Error())
 			} else if len(rest) != 0 {
-				nfe.AddError(errors.New("trailing data after ASN1-encoded SCT list"))
+				errs.AddID(ErrAsn1TrailingSCT)
 			} else {
 				if rest, err := tls.Unmarshal(out.RawSCT, &out.SCTList); err != nil {
-					nfe.AddError(fmt.Errorf("failed to tls.Unmarshal SCT list: %v", err))
+					errs.AddID(ErrAsn1InvalidSCTContents, err.Error())
 				} else if len(rest) != 0 {
-					nfe.AddError(errors.New("trailing data after TLS-encoded SCT list"))
+					errs.AddID(ErrAsn1TrailingSCTContents, err.Error())
 				}
 			}
 		} else {
@@ -2227,51 +2169,55 @@ func parseCertificate(in *certificate) (*Certificate, error) {
 			out.UnhandledCriticalExtensions = append(out.UnhandledCriticalExtensions, e.Id)
 		}
 	}
-	checkCertificate(out, &nfe)
-	if nfe.HasError() {
-		return out, nfe
+	checkCertificate(out, &errs)
+	if errs.Fatal() {
+		return nil, errs.FirstFatal()
+	} else if !errs.Empty() {
+		return out, &errs
 	}
 	return out, nil
 }
 
 // checkValidity examines the validity information for compliance with RFC 5280
 // section 4.1.2.5.
-func checkValidity(validity validity, nfe *NonFatalErrors) {
+func checkValidity(validity validity, errs *Errors) {
 	// Re-parse the ASN.1 to allow us to make more detailed checks
 	var rawValidity struct {
 		NotBefore asn1.RawValue
 		NotAfter  asn1.RawValue
 	}
 	if rest, err := asn1.Unmarshal(validity.Raw, &rawValidity); err != nil {
-		nfe.AddError(fmt.Errorf("x509: failed to unmarshal validity information: %v", err))
+		errs.AddID(ErrAsn1InvalidValidity, err.Error())
+		return
 	} else if len(rest) > 0 {
-		nfe.AddError(errors.New("x509: trailing data after validity information"))
+		errs.AddID(ErrAsn1TrailingValidity)
 	}
-	checkValidDate("NotBefore", validity.NotBefore, rawValidity.NotBefore, nfe)
-	checkValidDate("NotAfter", validity.NotAfter, rawValidity.NotAfter, nfe)
+	checkValidDate("NotBefore", validity.NotBefore, rawValidity.NotBefore, errs)
+	checkValidDate("NotAfter", validity.NotAfter, rawValidity.NotAfter, errs)
 }
 
-func checkValidDate(which string, t time.Time, val asn1.RawValue, nfe *NonFatalErrors) {
+func checkValidDate(which string, t time.Time, val asn1.RawValue, errs *Errors) {
 	var expectLen int
 	if val.Tag == asn1.TagUTCTime {
 		// UTCTime must be used for dates <= 2049
 		if t.Year() >= 2050 {
-			nfe.AddError(fmt.Errorf("x509: date in UTCTime for validity.%s is after 2050", which))
+			errs.AddID(ErrDateLateForUTC, which)
 		}
 		expectLen = 12 // YYMMDDHHMMSS
 	} else if val.Tag == asn1.TagGeneralizedTime {
 		// GeneralizedTime must be used for dates >= 2050
 		if t.Year() < 2050 {
-			nfe.AddError(fmt.Errorf("x509: date in GeneralizedTime for validity.%s is before 2050", which))
+			errs.AddID(ErrDateEarlyForGeneralized, which)
 		}
 		expectLen = 14 // YYYYMMDDHHMMSS
 	} else {
-		nfe.AddError(fmt.Errorf("x509: invalid tag %d for validity.%s", val.Tag, which))
+		errs.AddID(ErrAsn1InvalidValidityTag, val.Tag, which)
+		return
 	}
 	// Must include seconds and trailing Z
 	tstr := string(val.Bytes)
 	if !strings.HasSuffix(tstr, "Z") {
-		nfe.AddError(fmt.Errorf("x509: date for validity.%s is not in Zulu time", which))
+		errs.AddID(ErrDateNonZulu, which)
 	}
 	firstNonDigit := strings.IndexFunc(tstr,
 		func(r rune) bool {
@@ -2279,29 +2225,29 @@ func checkValidDate(which string, t time.Time, val asn1.RawValue, nfe *NonFatalE
 				r != '5' && r != '6' && r != '7' && r != '8' && r != '9')
 		})
 	if firstNonDigit != expectLen {
-		nfe.AddError(fmt.Errorf("x509: date for validity.%s is incomplete", which))
+		errs.AddID(ErrDateIncomplete, which)
 	}
 	if strings.ContainsRune(tstr, '.') {
-		nfe.AddError(fmt.Errorf("x509: date for validity.%s includes fractional seconds", which))
+		errs.AddID(ErrDateFraction, which)
 	}
 }
 
 // checkCertificate checks the parsed Certificate for validity, potentially adding
-// new errors to nfe.  This function particularly checks for errors resulting from
+// new errors to errs.  This function particularly checks for errors resulting from
 // interactions between different parts of the certificate (e.g. between extensions)
 // rather than errors that are local to a single part; the latter are generally
 // detected during parsing.
-func checkCertificate(cert *Certificate, nfe *NonFatalErrors) {
+func checkCertificate(cert *Certificate, errs *Errors) {
 	// Version checks
 	if len(cert.Extensions) > 0 && cert.Version < 3 {
-		nfe.AddError(fmt.Errorf("x509: extensions present in non-V3 (v%d) certificate", cert.Version))
+		errs.AddID(ErrExtensionsInOldCert, cert.Version)
 	}
 	if cert.SubjectUniqueId.BitLength > 0 || cert.IssuerUniqueId.BitLength > 0 {
 		if cert.Version < 2 {
-			nfe.AddError(errors.New("x509: SubjectUniqueIdentifier / IssuerUniqueIdentifier present in V1 cert"))
+			errs.AddID(ErrUniqueIDInV1Cert)
 		}
 		if len(cert.Extensions) == 0 && cert.Version != 2 {
-			nfe.AddError(fmt.Errorf("x509: non-V2 (V%d) certificate with UniqueIdentifier but no extensions", cert.Version))
+			errs.AddID(ErrUniqueIDNoExtsNotV2, cert.Version)
 		}
 	}
 
@@ -2309,11 +2255,11 @@ func checkCertificate(cert *Certificate, nfe *NonFatalErrors) {
 	if oidInExtensions(OIDExtensionKeyUsage, cert.Extensions) {
 		if cert.IsCA {
 			if (cert.KeyUsage & KeyUsageCertSign) == 0 {
-				nfe.AddError(errors.New("x509: CA certificate missing keyCertSign bit in KeyUsage"))
+				errs.AddID(ErrKeyUsageCANoSign)
 			}
 		} else {
 			if cert.KeyUsage&KeyUsageCertSign == KeyUsageCertSign {
-				nfe.AddError(errors.New("x509: non-CA certificate with keyCertSign bit in KeyUsage"))
+				errs.AddID(ErrKeyUsageNonCAKeySign)
 			}
 		}
 	}
@@ -2321,7 +2267,7 @@ func checkCertificate(cert *Certificate, nfe *NonFatalErrors) {
 	// NameConstraints checks
 	if oidInExtensions(OIDExtensionNameConstraints, cert.Extensions) {
 		if !cert.IsCA {
-			nfe.AddError(errors.New("x509: NameConstraints extension in non-CA certificate"))
+			errs.AddID(ErrNameConstraintsNonCA)
 		}
 	}
 
@@ -2329,7 +2275,7 @@ func checkCertificate(cert *Certificate, nfe *NonFatalErrors) {
 	if oidInExtensions(OIDExtensionPolicyMappings, cert.Extensions) {
 		if !oidInExtensions(OIDExtensionCertificatePolicies, cert.Extensions) {
 			for _, mapOID := range cert.PolicyMappings {
-				nfe.AddError(fmt.Errorf("x509: PolicyMapping extension referencing unspecified policy %v", mapOID.IssuerPolicy))
+				errs.AddID(ErrPolicyMappingsMissingPolicy, mapOID.IssuerPolicy)
 			}
 		} else {
 		maploop:
@@ -2339,7 +2285,7 @@ func checkCertificate(cert *Certificate, nfe *NonFatalErrors) {
 						break maploop
 					}
 				}
-				nfe.AddError(fmt.Errorf("x509: PolicyMapping extension referencing unspecified policy %v", mapOID.IssuerPolicy))
+				errs.AddID(ErrPolicyMappingsMissingPolicy, mapOID.IssuerPolicy)
 			}
 		}
 	}
@@ -2347,7 +2293,7 @@ func checkCertificate(cert *Certificate, nfe *NonFatalErrors) {
 	// SubjectKeyIdentifier checks
 	if !oidInExtensions(OIDExtensionSubjectKeyId, cert.Extensions) {
 		if cert.IsCA {
-			nfe.AddError(errors.New("x509: SubjectKeyIdentifier missing in CA certificate"))
+			errs.AddID(ErrSubjectKeyIDMissingInCA)
 		}
 	}
 
@@ -2355,10 +2301,10 @@ func checkCertificate(cert *Certificate, nfe *NonFatalErrors) {
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(OIDExtensionBasicConstraints) {
 			if cert.IsCA && (cert.KeyUsage&KeyUsageCertSign == KeyUsageCertSign) && !ext.Critical {
-				nfe.AddError(errors.New("x509: BasicConstraints extension non-critical in CA certificate"))
+				errs.AddID(ErrBasicConstraintsCANonCritical)
 			}
 			if !cert.IsCA && cert.MaxPathLen != -1 {
-				nfe.AddError(errors.New("x509: pathLenConstraint set in non-CA certificate"))
+				errs.AddID(ErrBasicConstraintsNonCAPathLen, cert.MaxPathLen)
 			}
 			break
 		}
@@ -2383,7 +2329,7 @@ func ParseTBSCertificate(asn1Data []byte) (*Certificate, error) {
 
 // ParseCertificate parses a single certificate from the given ASN.1 DER data.
 // This function can return both a Certificate and an error (in which case the
-// error will be of type NonFatalErrors).
+// error will be of type *Errors).
 func ParseCertificate(asn1Data []byte) (*Certificate, error) {
 	var cert certificate
 	rest, err := asn1.Unmarshal(asn1Data, &cert)
@@ -2400,7 +2346,7 @@ func ParseCertificate(asn1Data []byte) (*Certificate, error) {
 // ParseCertificates parses one or more certificates from the given ASN.1 DER
 // data. The certificates must be concatenated with no intermediate padding.
 // This function can return both a slice of Certificate and an error (in which
-// case the error will be of type NonFatalErrors).
+// case the error will be of type *Errors).
 func ParseCertificates(asn1Data []byte) ([]*Certificate, error) {
 	var v []*certificate
 
@@ -2414,22 +2360,22 @@ func ParseCertificates(asn1Data []byte) ([]*Certificate, error) {
 		v = append(v, cert)
 	}
 
-	var nfe NonFatalErrors
+	var errs Errors
 	ret := make([]*Certificate, len(v))
 	for i, ci := range v {
 		cert, err := parseCertificate(ci)
 		if err != nil {
-			if errs, ok := err.(NonFatalErrors); !ok {
+			if moreErrs, ok := err.(*Errors); !ok {
 				return nil, err
 			} else {
-				nfe.Errors = append(nfe.Errors, errs.Errors...)
+				errs.Errs = append(errs.Errs, moreErrs.Errs...)
 			}
 		}
 		ret[i] = cert
 	}
 
-	if nfe.HasError() {
-		return ret, nfe
+	if !errs.Empty() {
+		return ret, &errs
 	}
 	return ret, nil
 }
@@ -3579,14 +3525,14 @@ func parseCertificateRequest(in *certificateRequest) (*CertificateRequest, error
 	}
 
 	var err error
-	var nfe NonFatalErrors
-	out.PublicKey, err = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCSR.PublicKey, &nfe)
+	var errs Errors
+	out.PublicKey, err = parsePublicKey(out.PublicKeyAlgorithm, &in.TBSCSR.PublicKey, &errs)
 	if err != nil {
 		return nil, err
 	}
 	// Treat non-fatal errors as fatal here.
-	if len(nfe.Errors) > 0 {
-		return nil, nfe.Errors[0]
+	if !errs.Empty() {
+		return nil, errs.Errs[0]
 	}
 
 	var subject pkix.RDNSequence

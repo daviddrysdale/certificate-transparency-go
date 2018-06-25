@@ -1,7 +1,6 @@
 package x509_test
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -200,32 +199,32 @@ func TestErrorsFilter(t *testing.T) {
 }
 
 func TestErrorsAppend(t *testing.T) {
-	errA := errors.New("A")
-	errB := errors.New("B")
-	errC := errors.New("C")
-	errD := errors.New("D")
+	errA := x509.Error{Summary: "A"}
+	errB := x509.Error{Summary: "B"}
+	errC := x509.Error{Summary: "C"}
+	errD := x509.Error{Summary: "D"}
 	tests := []struct {
-		left, right, want *x509.NonFatalErrors
+		left, right, want *x509.Errors
 	}{
 		{
-			left:  &x509.NonFatalErrors{Errors: []error{errA}},
-			right: &x509.NonFatalErrors{Errors: []error{errB}},
-			want:  &x509.NonFatalErrors{Errors: []error{errA, errB}},
+			left:  &x509.Errors{Errs: []x509.Error{errA}},
+			right: &x509.Errors{Errs: []x509.Error{errB}},
+			want:  &x509.Errors{Errs: []x509.Error{errA, errB}},
 		},
 		{
-			left:  &x509.NonFatalErrors{Errors: []error{errA, errB}},
-			right: &x509.NonFatalErrors{Errors: []error{errC, errD}},
-			want:  &x509.NonFatalErrors{Errors: []error{errA, errB, errC, errD}},
+			left:  &x509.Errors{Errs: []x509.Error{errA, errB}},
+			right: &x509.Errors{Errs: []x509.Error{errC, errD}},
+			want:  &x509.Errors{Errs: []x509.Error{errA, errB, errC, errD}},
 		},
 		{
 			left:  nil,
-			right: &x509.NonFatalErrors{Errors: []error{errC, errD}},
-			want:  &x509.NonFatalErrors{Errors: []error{errC, errD}},
+			right: &x509.Errors{Errs: []x509.Error{errC, errD}},
+			want:  &x509.Errors{Errs: []x509.Error{errC, errD}},
 		},
 		{
-			left:  &x509.NonFatalErrors{Errors: []error{errC, errD}},
+			left:  &x509.Errors{Errs: []x509.Error{errC, errD}},
 			right: nil,
-			want:  &x509.NonFatalErrors{Errors: []error{errC, errD}},
+			want:  &x509.Errors{Errs: []x509.Error{errC, errD}},
 		},
 		{
 			left:  nil,
@@ -233,9 +232,9 @@ func TestErrorsAppend(t *testing.T) {
 			want:  nil,
 		},
 		{
-			left:  &x509.NonFatalErrors{Errors: []error{}},
+			left:  &x509.Errors{Errs: []x509.Error{}},
 			right: nil,
-			want:  &x509.NonFatalErrors{Errors: []error{}},
+			want:  &x509.Errors{Errs: []x509.Error{}},
 		},
 	}
 	for _, test := range tests {

@@ -214,13 +214,13 @@ func TestParseRPKIAddrBlocks(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
-			var nfe NonFatalErrors
-			got := parseRPKIAddrBlocks(fromHex(test.in), &nfe)
+			var errs Errors
+			got := parseRPKIAddrBlocks(fromHex(test.in), &errs)
 			if !reflect.DeepEqual(got, test.want) {
-				t.Errorf("parseRPKIAddrBlocks(%s)=%+v,%v; want %+v,_", test.in, got, nfe, test.want)
+				t.Errorf("parseRPKIAddrBlocks(%s)=%+v,%v; want %+v,_", test.in, got, errs, test.want)
 			}
-			if !strings.Contains(nfe.Error(), test.wantErr) {
-				t.Errorf("parseRPKIAddrBlocks(%s)=_,%v; want _, err containing %q", test.in, nfe, test.wantErr)
+			if !strings.Contains(errs.Error(), test.wantErr) {
+				t.Errorf("parseRPKIAddrBlocks(%s)=_,%v; want _, err containing %q", test.in, errs, test.wantErr)
 			}
 		})
 	}
@@ -354,16 +354,16 @@ func TestParseRPKIASIdentifiers(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
-			var nfe NonFatalErrors
-			gotAS, gotRDI := parseRPKIASIdentifiers(fromHex(test.in), &nfe)
+			var errs Errors
+			gotAS, gotRDI := parseRPKIASIdentifiers(fromHex(test.in), &errs)
 			if !reflect.DeepEqual(gotAS, test.wantAS) {
-				t.Errorf("parseRPKIASIdentifiers(%s)=%+v,_,%v; want %+v,_", test.in, gotAS, nfe, test.wantAS)
+				t.Errorf("parseRPKIASIdentifiers(%s)=%+v,_,%v; want %+v,_", test.in, gotAS, errs, test.wantAS)
 			}
 			if !reflect.DeepEqual(gotRDI, test.wantRDI) {
-				t.Errorf("parseRPKIASIdentifiers(%s)=_,%+v,%v; want _,%+v", test.in, gotRDI, nfe, test.wantRDI)
+				t.Errorf("parseRPKIASIdentifiers(%s)=_,%+v,%v; want _,%+v", test.in, gotRDI, errs, test.wantRDI)
 			}
-			if !strings.Contains(nfe.Error(), test.wantErr) {
-				t.Errorf("parseRPKIASIdentifiers(%s)=_,_,%v; want _,_, err containing %q", test.in, nfe, test.wantErr)
+			if !strings.Contains(errs.Error(), test.wantErr) {
+				t.Errorf("parseRPKIASIdentifiers(%s)=_,_,%v; want _,_, err containing %q", test.in, errs, test.wantErr)
 			}
 		})
 	}

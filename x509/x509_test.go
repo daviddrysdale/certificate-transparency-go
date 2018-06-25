@@ -663,7 +663,7 @@ func TestCreateSelfSignedCertificate(t *testing.T) {
 			UnknownExtKeyUsage: testUnknownExtKeyUsage,
 
 			BasicConstraintsValid: true,
-			IsCA:                  true,
+			IsCA: true,
 
 			OCSPServer:            []string{"http://ocsp.example.com"},
 			IssuingCertificateURL: []string{"http://crt.example.com/ca1.crt"},
@@ -1372,29 +1372,12 @@ func TestParsePEMCRL(t *testing.T) {
 	// Can't check the signature here without a package cycle.
 }
 
-func TestNonFatalErrors(t *testing.T) {
-	nfe := NonFatalErrors{}
-
-	nfe.AddError(errors.New("one"))
-	nfe.AddError(errors.New("two"))
-	nfe.AddError(errors.New("three"))
-
-	if !nfe.HasError() {
-		t.Fatal("NonFatalError claimed not to have an error")
-	}
-
-	if !strings.Contains(nfe.Error(), "one; two; three") {
-		t.Fatalf("Didn't see expected string from Error(), got '%s'", nfe.Error())
-	}
-}
-
 func TestIsFatal(t *testing.T) {
 	tests := []struct {
 		err  error
 		want bool
 	}{
 		{err: errors.New("normal error"), want: true},
-		{err: NonFatalErrors{}, want: false},
 		{err: nil, want: false},
 		{err: &Errors{}, want: false},
 		{err: &Errors{Errs: []Error{{ID: 1, Summary: "test", Fatal: true}}}, want: true},
@@ -1967,7 +1950,7 @@ func TestMaxPathLen(t *testing.T) {
 		NotAfter:  time.Unix(100000, 0),
 
 		BasicConstraintsValid: true,
-		IsCA:                  true,
+		IsCA: true,
 	}
 
 	cert1 := serialiseAndParse(t, template)
@@ -2008,8 +1991,8 @@ func TestNoAuthorityKeyIdInSelfSignedCert(t *testing.T) {
 		NotAfter:  time.Unix(100000, 0),
 
 		BasicConstraintsValid: true,
-		IsCA:                  true,
-		SubjectKeyId:          []byte{1, 2, 3, 4},
+		IsCA:         true,
+		SubjectKeyId: []byte{1, 2, 3, 4},
 	}
 
 	if cert := serialiseAndParse(t, template); len(cert.AuthorityKeyId) != 0 {
@@ -2271,7 +2254,7 @@ func TestCheckValidDate(t *testing.T) {
 			t.Errorf("failed to decode test data %x: %v", data, err)
 			continue
 		}
-		var got NonFatalErrors
+		var got Errors
 		checkValidDate("test", test.when, raw, &got)
 		if !strings.Contains(got.Error(), test.want) {
 			t.Errorf("checkValidDate(%v, %+v)=%v, want err containing %q", test.when, raw, got, test.want)
@@ -2658,7 +2641,7 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "RSAParamsNonNULL", in: "testdata/invalid/xf-pubkey-rsa-param-nonnull.pem", wantErr: "RSA key missing NULL parameters"},
 		{desc: "EmptyEKU", in: "testdata/invalid/xf-ext-extended-key-usage-empty.pem", wantErr: "empty ExtendedKeyUsage"},
 		{desc: "EKUEmptyOID", in: "testdata/invalid/xf-ext-extended-key-usage-empty-oid.pem", wantErr: "zero length OBJECT IDENTIFIER"},
-		{desc: "SECp192r1TooShort", in: "testdata/invalid/xf-pubkey-ecdsa-secp192r1.pem", wantErr: "insecure curve (secp192r1)"},
+		{desc: "SECp192r1TooShort", in: "testdata/invalid/xf-pubkey-ecdsa-secp192r1.pem", wantErr: "insecure pubkey curve (secp192r1)"},
 		{desc: "InvalidSANEncoding", in: "testdata/invalid/xf-ext-altname-invalid-encoding.pem", wantErr: "invalid DNS altName"},
 		{desc: "SerialNoIntegerNotMinimal", in: "testdata/invalid/xf-der-invalid-nonminimal-int.pem", wantErr: "integer not minimally-encoded", wantFatal: true},
 		{desc: "RSAIntegerNotMinimal", in: "testdata/invalid/xf-der-pubkey-rsa-nonminimal-int.pem", wantErr: "integer not minimally-encoded"},
@@ -2675,11 +2658,11 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "CertPoliciesDuplicate", in: "testdata/invalid/xf-ext-cert-policies-dup.pem", wantErr: "duplicate policy"},
 		{desc: "CertPoliciesUnknownAny", in: "testdata/invalid/xf-ext-cert-policies-any-qual.pem", wantErr: "unknown policy qualifier"},
 		{desc: "SubjectInfoEmpty", in: "testdata/invalid/xf-ext-subject-info-empty.pem", wantErr: "empty SubjectInfoAccess"},
-		{desc: "SubjectDirAttrEmpty", in: "testdata/invalid/xf-ext-subject-dirattr-empty.pem", wantErr: "empty X.509 subject directory attributes"},
+		{desc: "SubjectDirAttrEmpty", in: "testdata/invalid/xf-ext-subject-dirattr-empty.pem", wantErr: "empty SubjectDirectoryAttributes"},
 		{desc: "NegativeSerialNumber", in: "testdata/invalid/xf-serial-negative.pem", wantErr: "negative serial number"},
 		{desc: "ZeroSerialNumber", in: "testdata/invalid/xf-serial-zero.pem", wantErr: "zero serial number"},
 		{desc: "NegativePathLen", in: "testdata/invalid/xf-ext-constraints-neg-pathlen.pem", wantErr: "BasicConstraints extension with negative path len"},
-		{desc: "NonCAPathLenConstraint", in: "testdata/invalid/xf-ext-constraints-path-nonca.pem", wantErr: "pathLenConstraint set in non-CA certificate"},
+		{desc: "NonCAPathLenConstraint", in: "testdata/invalid/xf-ext-constraints-path-nonca.pem", wantErr: "non-zero 1 pathLen in non-CA certificate"},
 		{desc: "NonCAKeySign", in: "testdata/invalid/xf-ext-keysign-nonca.pem", wantErr: "non-CA certificate with keyCertSign"},
 		{desc: "NonCANameConstraints", in: "testdata/invalid/xf-ext-name-constraints-nonca.pem", wantErr: "NameConstraints extension in non-CA certificate"},
 		{desc: "PolicyMapUnref", in: "testdata/invalid/xf-ext-policy-map-unref.pem", wantErr: "referencing unspecified policy"},

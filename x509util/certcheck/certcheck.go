@@ -117,7 +117,7 @@ func main() {
 
 // chainFromSite retrieves the certificate chain from an https: URL.
 // Note that both a chain and an error can be returned (in which case
-// the error will be of type x509.NonFatalErrors).
+// the error will be of type x509.Errors).
 func chainFromSite(target string) ([]*x509.Certificate, error) {
 	u, err := url.Parse(target)
 	if err != nil {
@@ -139,24 +139,26 @@ func chainFromSite(target string) ([]*x509.Certificate, error) {
 
 	// Convert base crypto/x509.Certificates to our forked x509.Certificate type.
 	goChain := conn.ConnectionState().PeerCertificates
-	var nfe *x509.NonFatalErrors
+	var allErrs *x509.Errors
 	chain := make([]*x509.Certificate, len(goChain))
 	for i, goCert := range goChain {
 		cert, err := x509.ParseCertificate(goCert.Raw)
 		if x509.IsFatal(err) {
 			return nil, fmt.Errorf("%s: failed to convert Go Certificate [%d]: %v", target, i, err)
-		} else if errs, ok := err.(x509.NonFatalErrors); ok {
-			nfe = nfe.Append(&errs)
+		} else if errs, ok := err.(*x509.Errors); ok {
+			allErrs = allErrs.Append(errs)
 		} else if err != nil {
 			return nil, fmt.Errorf("%s: failed to convert Go Certificate [%d]: %v", target, i, err)
 		}
 		chain[i] = cert
 	}
 
-	if nfe.HasError() {
-		return chain, *nfe
+	if allErrs.Empty() {
+		// Can't just set allErrs to nil because a nil-valued *x509.Errors
+		// is still an instance of error.
+		return chain, nil
 	}
-	return chain, nil
+	return chain, allErrs
 }
 
 // chainFromSite retrieves a certificate chain from a PEM file.
@@ -167,23 +169,25 @@ func chainFromFile(filename string) ([]*x509.Certificate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: failed to read data: %v", filename, err)
 	}
-	var nfe *x509.NonFatalErrors
+	var allErrs *x509.Errors
 	var chain []*x509.Certificate
 	for _, data := range dataList {
 		certs, err := x509.ParseCertificates(data)
 		if x509.IsFatal(err) {
 			return nil, fmt.Errorf("%s: failed to parse: %v", filename, err)
-		} else if errs, ok := err.(x509.NonFatalErrors); ok {
-			nfe = nfe.Append(&errs)
+		} else if errs, ok := err.(*x509.Errors); ok {
+			allErrs = allErrs.Append(errs)
 		} else if err != nil {
 			return nil, fmt.Errorf("%s: failed to parse: %v", filename, err)
 		}
 		chain = append(chain, certs...)
 	}
-	if nfe.HasError() {
-		return chain, *nfe
+	if allErrs.Empty() {
+		// Can't just set allErrs to nil because a nil-valued *x509.Errors
+		// is still an instance of error.
+		return chain, nil
 	}
-	return chain, nil
+	return chain, allErrs
 }
 
 func validateChain(chain []*x509.Certificate, opts x509.VerifyOptions, rootsFile, intermediatesFile string, useSystemRoots bool) error {
