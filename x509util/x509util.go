@@ -874,30 +874,11 @@ func showSignature(result *bytes.Buffer, cert *x509.Certificate) {
 	result.WriteString("\n")
 }
 
-// TODO(drysdale): remove this once all standard OIDs are parsed and printed.
 func oidAlreadyPrinted(oid asn1.ObjectIdentifier) bool {
-	if oid.Equal(x509.OIDExtensionSubjectKeyId) ||
-		oid.Equal(x509.OIDExtensionKeyUsage) ||
-		oid.Equal(x509.OIDExtensionExtendedKeyUsage) ||
-		oid.Equal(x509.OIDExtensionAuthorityKeyId) ||
-		oid.Equal(x509.OIDExtensionBasicConstraints) ||
-		oid.Equal(x509.OIDExtensionSubjectAltName) ||
-		oid.Equal(x509.OIDExtensionCertificatePolicies) ||
-		oid.Equal(x509.OIDExtensionNameConstraints) ||
-		oid.Equal(x509.OIDExtensionCRLDistributionPoints) ||
-		oid.Equal(x509.OIDExtensionIssuerAltName) ||
-		oid.Equal(x509.OIDExtensionSubjectDirectoryAttributes) ||
-		oid.Equal(x509.OIDExtensionInhibitAnyPolicy) ||
-		oid.Equal(x509.OIDExtensionPolicyConstraints) ||
-		oid.Equal(x509.OIDExtensionPolicyMappings) ||
-		oid.Equal(x509.OIDExtensionAuthorityInfoAccess) ||
-		oid.Equal(x509.OIDExtensionFreshestCRL) ||
-		oid.Equal(x509.OIDExtensionSubjectInfoAccess) ||
-		oid.Equal(x509.OIDExtensionIPPrefixList) ||
-		oid.Equal(x509.OIDExtensionASList) ||
-		oid.Equal(x509.OIDExtensionCTPoison) ||
-		oid.Equal(x509.OIDExtensionCTSCT) ||
-		oid.Equal(x509ext.OIDExtensionCTSTH) {
+	if OIDForStandardExtension(oid) {
+		return true
+	}
+	if oid.Equal(x509ext.OIDExtensionCTSTH) {
 		return true
 	}
 	return false
