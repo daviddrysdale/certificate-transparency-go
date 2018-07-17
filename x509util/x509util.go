@@ -439,6 +439,7 @@ func CertificateToString(cert *x509.Certificate) string {
 	showCertPolicies(&result, cert)
 	showCRLDPs(&result, cert)
 	showFreshestCRL(&result, cert)
+	showIssuerAltName(&result, cert)
 	showPolicyMappings(&result, cert)
 	showPolicyConstraints(&result, cert)
 	showInhibitAnyPolicy(&result, cert)
@@ -608,6 +609,15 @@ func showFreshestCRL(result *bytes.Buffer, cert *x509.Certificate) {
 			commaAppend(&buf, "URI:"+pt)
 		}
 		result.WriteString(fmt.Sprintf("                    %v\n", buf.String()))
+	}
+}
+
+func showIssuerAltName(result *bytes.Buffer, cert *x509.Certificate) {
+	count, critical := OIDInExtensions(x509.OIDExtensionIssuerAltName, cert.Extensions)
+	if count > 0 {
+		result.WriteString(fmt.Sprintf("            X509v3 Issuer Alternative Name:"))
+		showCritical(result, critical)
+		result.WriteString(fmt.Sprintf("                  %v\n", GeneralNamesToString(&cert.IssuerAltNames)))
 	}
 }
 
@@ -875,6 +885,7 @@ func oidAlreadyPrinted(oid asn1.ObjectIdentifier) bool {
 		oid.Equal(x509.OIDExtensionCertificatePolicies) ||
 		oid.Equal(x509.OIDExtensionNameConstraints) ||
 		oid.Equal(x509.OIDExtensionCRLDistributionPoints) ||
+		oid.Equal(x509.OIDExtensionIssuerAltName) ||
 		oid.Equal(x509.OIDExtensionSubjectDirectoryAttributes) ||
 		oid.Equal(x509.OIDExtensionInhibitAnyPolicy) ||
 		oid.Equal(x509.OIDExtensionPolicyConstraints) ||
