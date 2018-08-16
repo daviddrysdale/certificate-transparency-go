@@ -1548,10 +1548,19 @@ func parseSANExtension(value []byte, nfe *NonFatalErrors) (dnsNames, emailAddres
 	err = forEachSAN(value, func(tag int, data []byte) error {
 		switch tag {
 		case nameTypeEmail:
+			if err := isIA5String(string(data)); err != nil {
+				nfe.AddError(fmt.Errorf("x509: invalid email altName (%x) contents: %v", data, err))
+			}
 			emailAddresses = append(emailAddresses, string(data))
 		case nameTypeDNS:
+			if err := isIA5String(string(data)); err != nil {
+				nfe.AddError(fmt.Errorf("x509: invalid DNS altName (%x) contents: %v", data, err))
+			}
 			dnsNames = append(dnsNames, string(data))
 		case nameTypeURI:
+			if err := isIA5String(string(data)); err != nil {
+				nfe.AddError(fmt.Errorf("x509: invalid URI altName (%x) contents: %v", data, err))
+			}
 			uri, err := url.Parse(string(data))
 			if err != nil {
 				return fmt.Errorf("x509: cannot parse URI %q: %s", string(data), err)

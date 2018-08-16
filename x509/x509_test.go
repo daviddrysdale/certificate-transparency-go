@@ -2575,6 +2575,7 @@ func TestParseCertificateFail(t *testing.T) {
 		{desc: "EmptyEKU", in: "testdata/invalid/xf-ext-extended-key-usage-empty.pem", wantErr: "empty ExtendedKeyUsage"},
 		{desc: "EKUEmptyOID", in: "testdata/invalid/xf-ext-extended-key-usage-empty-oid.pem", wantErr: "zero length OBJECT IDENTIFIER"},
 		{desc: "SECp192r1TooShort", in: "testdata/invalid/xf-pubkey-ecdsa-secp192r1.pem", wantErr: "insecure curve (secp192r1)"},
+		{desc: "InvalidSANEncoding", in: "testdata/invalid/xf-ext-altname-invalid-encoding.pem", wantErr: "invalid DNS altName"},
 		{desc: "SerialNoIntegerNotMinimal", in: "testdata/invalid/xf-der-invalid-nonminimal-int.pem", wantErr: "integer not minimally-encoded", wantFatal: true},
 		{desc: "RSAIntegerNotMinimal", in: "testdata/invalid/xf-der-pubkey-rsa-nonminimal-int.pem", wantErr: "integer not minimally-encoded"},
 		{desc: "SubjectNonPrintable", in: "testdata/invalid/xf-subject-nonprintable.pem", wantErr: "PrintableString contains invalid character"},
