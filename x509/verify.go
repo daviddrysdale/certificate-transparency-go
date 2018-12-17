@@ -774,7 +774,7 @@ func (c *Certificate) Verify(opts VerifyOptions) (chains [][]*Certificate, err e
 	if opts.Roots.contains(c) {
 		candidateChains = append(candidateChains, []*Certificate{c})
 	} else {
-		if candidateChains, err = c.buildChains(nil, []*Certificate{c}, nil, &opts); err != nil {
+		if candidateChains, err = c.buildChains([]*Certificate{c}, nil, &opts); err != nil {
 			return nil, err
 		}
 	}
@@ -817,7 +817,7 @@ func appendToFreshChain(chain []*Certificate, cert *Certificate) []*Certificate 
 // for failed checks due to different intermediates having the same Subject.
 const maxChainSignatureChecks = 100
 
-func (c *Certificate) buildChains(cache map[*Certificate][][]*Certificate, currentChain []*Certificate, sigChecks *int, opts *VerifyOptions) (chains [][]*Certificate, err error) {
+func (c *Certificate) buildChains(currentChain []*Certificate, sigChecks *int, opts *VerifyOptions) (chains [][]*Certificate, err error) {
 	var (
 		hintErr  error
 		hintCert *Certificate
@@ -856,14 +856,8 @@ func (c *Certificate) buildChains(cache map[*Certificate][][]*Certificate, curre
 		case rootCertificate:
 			chains = append(chains, appendToFreshChain(currentChain, candidate))
 		case intermediateCertificate:
-			if cache == nil {
-				cache = make(map[*Certificate][][]*Certificate)
-			}
-			childChains, ok := cache[candidate]
-			if !ok {
-				childChains, err = candidate.buildChains(cache, appendToFreshChain(currentChain, candidate), sigChecks, opts)
-				cache[candidate] = childChains
-			}
+			var childChains [][]*Certificate
+			childChains, err = candidate.buildChains(appendToFreshChain(currentChain, candidate), sigChecks, opts)
 			chains = append(chains, childChains...)
 		}
 	}
