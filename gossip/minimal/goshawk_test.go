@@ -64,7 +64,7 @@ func TestNewGoshawkFromFile(t *testing.T) {
 	}
 }
 
-// Two real STHs from argon2018
+// Real STHs from argon2018
 var (
 	argonSTH1 = &ct.SignedTreeHead{
 		Version:   0,
@@ -92,8 +92,21 @@ var (
 			Signature: dehex("304602210095748a1576400e640d4915ff65351b688fe9bbeb8dd5c3a0773224d29f9bc4ff022100857d31faa70bc2fa646c5f51be14ef812c127c231fb6ce11c9fbd16ebf069dda"),
 		},
 	}
-	// Consistency proof between them
-	argonProof = ct.GetSTHConsistencyResponse{
+	argonSTH3 = &ct.SignedTreeHead{
+		Version:   0,
+		TreeSize:  427479905,
+		Timestamp: 1552491573172,
+		SHA256RootHash: [32]byte{
+			0x13, 0x71, 0x11, 0x28, 0x21, 0xcc, 0xed, 0xce, 0xe6, 0xae, 0xd1, 0x79, 0x31, 0x73, 0xa6, 0x7d,
+			0x17, 0x38, 0xec, 0x9f, 0xed, 0xdb, 0xb5, 0x86, 0xf9, 0x59, 0x4b, 0x1c, 0x62, 0x09, 0xe8, 0xb6,
+		},
+		TreeHeadSignature: ct.DigitallySigned{
+			Algorithm: tls.SignatureAndHashAlgorithm{Hash: tls.SHA256, Signature: tls.ECDSA},
+			Signature: dehex("3045022100a3a7c96b98788cd36a66cbbc3755d1bd011df1602edaa7999e33a98e867a3e9d02207a00e9000d72cd6425c42b4e93bd595f050f46663da83f2aa7ecd7ffb00188a5"),
+		},
+	}
+	// Consistency proofs between them
+	argonProof12 = ct.GetSTHConsistencyResponse{
 		Consistency: [][]byte{
 			dehex("befb58f2a0a01496c73f222582fab430cd268c2eada874269f1d9a47855b111f"),
 			dehex("cdd5bb33fcf18d5e091b36d44a6ad62f4e94c5ade3394e4c92ef7a55e88a48bc"),
@@ -122,7 +135,7 @@ Rp37MtRxTmACJV5ZPtfUA7htQ2hofuigZQs+bnFZkje+qejxoyvk2Q1VaA==
 func TestValidateSTH(t *testing.T) {
 	ctx := context.Background()
 	handlerBroken := false
-	proof := &argonProof
+	proof := &argonProof12
 	var handler http.HandlerFunc = func(w http.ResponseWriter, _ *http.Request) {
 		if handlerBroken {
 			return
@@ -136,11 +149,14 @@ func TestValidateSTH(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
-	o := originLog{logConfig: logConfig{
-		Name: "argon2018",
-		URL:  "http://ct.googleapis.com/logs/argon2018",
-		Log:  client,
-	}}
+	o := originLog{
+		logConfig: logConfig{
+			Name: "argon2018",
+			URL:  "http://ct.googleapis.com/logs/argon2018",
+			Log:  client,
+		},
+		graph: NewSTHGraph(),
+	}
 	sthInfo1 := x509ext.LogSTHInfo{
 		LogURL:            []byte(o.URL),
 		Version:           tls.Enum(argonSTH1.Version),
@@ -178,13 +194,18 @@ func TestValidateSTH(t *testing.T) {
 		t.Error("validateSTH(wrong-signature)=nil; want non-nil")
 	}
 	sthInfo1.Timestamp--
-	// Bad response from server.
+
+	// Move the STH along so the checker needs to ask for a consistency proof.
+	o.updateSTH(argonSTH2, argonSTH3)
+	o.graph.AddSTH(argonSTH2)
+	o.graph.AddSTH(argonSTH3)
+	// Bad get-sth-consistency response from server.
 	handlerBroken = true
 	if err := o.validateSTH(ctx, &sthInfo1); err == nil {
 		t.Error("validateSTH(bad-rsp)=nil; want non-nil")
 	}
 	handlerBroken = false
-	// Proof doesn't add up.
+	// STH consistency proof doesn't add up.
 	proof = &ct.GetSTHConsistencyResponse{
 		Consistency: [][]byte{
 			dehex("befb58f2a0a01496c73f222582fab430cd268c2eada874269f1d9a47855b111f"),
@@ -193,12 +214,15 @@ func TestValidateSTH(t *testing.T) {
 	if err := o.validateSTH(ctx, &sthInfo1); err == nil {
 		t.Error("validateSTH(wrong-proof)=nil; want non-nil")
 	}
-	proof = &argonProof
+	proof = &argonProof12
 }
 
 func TestUpdateAndGetLastSTH(t *testing.T) {
 	var nilp *ct.SignedTreeHead
-	o := originLog{logConfig: logConfig{Name: "argon2018", URL: "http://ct.googleapis.com/logs/argon2018"}}
+	o := originLog{
+		logConfig: logConfig{Name: "argon2018", URL: "http://ct.googleapis.com/logs/argon2018"},
+		graph:     NewSTHGraph(),
+	}
 
 	if got, want := o.getLastSTH(), nilp; got != want {
 		t.Errorf("o.getLastSTH()=%v; want %v", got, want)

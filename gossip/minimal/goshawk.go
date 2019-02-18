@@ -196,6 +196,7 @@ func (f *FileStateManager) Flush(ctx context.Context) error {
 type originLog struct {
 	logConfig
 	sigAlgo tls.SignatureAlgorithm
+	graph   *STHGraph
 
 	sths       chan *x509ext.LogSTHInfo
 	mu         sync.RWMutex
@@ -416,6 +417,7 @@ func NewBoundaryGoshawk(ctx context.Context, cfg *configpb.GoshawkConfig, hcLog,
 		hawk.origins[base.URL] = &originLog{
 			logConfig: *base,
 			sigAlgo:   sigAlgo,
+			graph:     NewSTHGraph(),
 			sths:      make(chan *x509ext.LogSTHInfo, cfg.BufferSize),
 		}
 		glog.Infof("configured source log %s at %s (%+v)", base.Name, base.URL, base)
@@ -544,29 +546,35 @@ func (o *originLog) validateSTH(ctx context.Context, sthInfo *x509ext.LogSTHInfo
 	if err := o.Log.VerifySTHSignature(sth); err != nil {
 		return fmt.Errorf("Checker(%s): failed to validate STH signature: %v", o.Name, err)
 	}
+	if err := o.graph.AddSTH(&sth); err != nil {
+		return fmt.Errorf("Checker(%s): failed to add STH to graph: %v", o.Name, err)
+	}
 
 	currentSTH := o.getLastSTH()
 	if currentSTH == nil {
 		glog.Warningf("Checker(%s): no current STH available", o.Name)
 		return nil
 	}
-	first, second := sthInfo.TreeSize, currentSTH.TreeSize
-	firstHash, secondHash := sthInfo.SHA256RootHash[:], currentSTH.SHA256RootHash[:]
-	if first > second {
-		glog.Warningf("Checker(%s): retrieved STH info (size=%d) > current STH (size=%d); reversing check", o.Name, first, second)
-		first, second = second, first
-		firstHash, secondHash = secondHash, firstHash
-	}
-	proof, err := o.Log.GetSTHConsistency(ctx, first, second)
-	if err != nil {
-		return err
-	}
-	glog.V(2).Infof("Checker(%s): got STH consistency proof %d=>%d of size %d", o.Name, first, second, len(proof))
 
-	if err := verifier.VerifyConsistencyProof(int64(first), int64(second), firstHash, secondHash, proof); err != nil {
-		return fmt.Errorf("Failed to VerifyConsistencyProof(%x @size=%d, %x @size=%d): %v", firstHash, first, secondHash, second, err)
+	// Find a set of edges needed to connect up the graph and retrieve them.
+	needed := o.graph.ConnectingEdges(currentSTH)
+	for _, edge := range needed {
+		fromHash := o.graph.STHForSize(edge.from).SHA256RootHash[:]
+		toHash := o.graph.STHForSize(edge.to).SHA256RootHash[:]
+		proof, err := o.Log.GetSTHConsistency(ctx, edge.from, edge.to)
+		if err != nil {
+			return fmt.Errorf("Checker(%s): failed to get-sth-consistency: %v", o.Name, err)
+		}
+		glog.V(2).Infof("Checker(%s): got STH consistency proof %d=>%d of size %d", o.Name, edge.from, edge.to, len(proof))
+
+		if err := verifier.VerifyConsistencyProof(int64(edge.from), int64(edge.to), fromHash, toHash, proof); err != nil {
+			return fmt.Errorf("Failed to VerifyConsistencyProof(%x @size=%d, %x @size=%d): %v", fromHash, edge.from, toHash, edge.to, err)
+		}
+		glog.Infof("Checker(%s): verified that hash %x @%d + proof = hash %x @%d\n", o.Name, fromHash, edge.from, toHash, edge.to)
+		if err := o.graph.AddEdge(&sth, currentSTH); err != nil {
+			return fmt.Errorf("Checker(%s): failed to add STH edge (%d->%d) to graph: %v", o.Name, edge.from, edge.to, err)
+		}
 	}
-	glog.Infof("Checker(%s): verified that hash %x @%d + proof = hash %x @%d\n", o.Name, firstHash, first, secondHash, second)
 	return nil
 }
 
@@ -577,7 +585,11 @@ func (o *originLog) STHRetriever(ctx context.Context) {
 			glog.Errorf("STHRetriever(%s): failed to get-sth: %v", o.Name, err)
 		} else {
 			glog.V(2).Infof("STHRetriever(%s): got STH size=%d timestamp=%d", o.Name, sth.TreeSize, sth.Timestamp)
-			o.updateSTHIfConsistent(ctx, sth)
+			if err := o.graph.AddSTH(sth); err != nil {
+				glog.Errorf("STHRetriever(%s): failed to add STH to graph: %v", o.Name, err)
+			} else {
+				o.updateSTHIfConsistent(ctx, sth)
+			}
 		}
 
 		// Wait before retrieving another STH.
@@ -594,6 +606,7 @@ func (o *originLog) STHRetriever(ctx context.Context) {
 func (o *originLog) updateSTHIfConsistent(ctx context.Context, sth *ct.SignedTreeHead) {
 	currentSTH := o.getLastSTH()
 	if currentSTH != nil {
+		// When updating the 'current' STH, always get a consistency proof.
 		first, firstHash := currentSTH.TreeSize, currentSTH.SHA256RootHash[:]
 		second, secondHash := sth.TreeSize, sth.SHA256RootHash[:]
 		proof, err := o.Log.GetSTHConsistency(ctx, first, second)
@@ -604,6 +617,11 @@ func (o *originLog) updateSTHIfConsistent(ctx context.Context, sth *ct.SignedTre
 		glog.V(2).Infof("STHRetriever(%s): got STH consistency proof %d=>%d of size %d", o.Name, first, second, len(proof))
 		if err := verifier.VerifyConsistencyProof(int64(first), int64(second), firstHash, secondHash, proof); err != nil {
 			glog.Errorf("STHRetriever(%s): failed to VerifyConsistencyProof(%x @size=%d, %x @size=%d): %v", o.Name, firstHash, first, secondHash, second, err)
+			return
+		}
+		// Add the new STH and an edge that leads to it into the graph.
+		if err := o.graph.AddEdge(currentSTH, sth); err != nil {
+			glog.Errorf("STHRetriever(%s): failed to add STH edge (%d, %d)  to graph: %v", o.Name, first, second, err)
 			return
 		}
 	}
