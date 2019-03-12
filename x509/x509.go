@@ -1603,48 +1603,6 @@ func forEachSAN(extension []byte, callback func(tag int, data []byte) error) err
 	return nil
 }
 
-func parseSANExtension(value []byte, nfe *NonFatalErrors) (dnsNames, emailAddresses []string, ipAddresses []net.IP, uris []*url.URL, err error) {
-	err = forEachSAN(value, func(tag int, data []byte) error {
-		switch tag {
-		case tagRFC822Name:
-			if err := isIA5String(string(data)); err != nil {
-				nfe.AddError(fmt.Errorf("x509: invalid email altName (%x) contents: %v", data, err))
-			}
-			emailAddresses = append(emailAddresses, string(data))
-		case tagDNSName:
-			if err := isIA5String(string(data)); err != nil {
-				nfe.AddError(fmt.Errorf("x509: invalid DNS altName (%x) contents: %v", data, err))
-			}
-			dnsNames = append(dnsNames, string(data))
-		case tagURI:
-			if err := isIA5String(string(data)); err != nil {
-				nfe.AddError(fmt.Errorf("x509: invalid URI altName (%x) contents: %v", data, err))
-			}
-			uri, err := url.Parse(string(data))
-			if err != nil {
-				return fmt.Errorf("x509: cannot parse URI %q: %s", string(data), err)
-			}
-			if len(uri.Host) > 0 {
-				if _, ok := domainToReverseLabels(uri.Host); !ok {
-					return fmt.Errorf("x509: cannot parse URI %q: invalid domain", string(data))
-				}
-			}
-			uris = append(uris, uri)
-		case tagIPAddress:
-			switch len(data) {
-			case net.IPv4len, net.IPv6len:
-				ipAddresses = append(ipAddresses, data)
-			default:
-				nfe.AddError(errors.New("x509: cannot parse IP address of length " + strconv.Itoa(len(data))))
-			}
-		}
-
-		return nil
-	})
-
-	return
-}
-
 // isValidIPMask reports whether mask consists of zero or more 1 bits, followed by zero bits.
 func isValidIPMask(mask []byte) bool {
 	seenZero := false
